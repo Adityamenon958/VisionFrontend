@@ -104,9 +104,9 @@ const Dashboard = () => {
       const { data: company, error: companyError } = await supabase
         .from("companies")
         .insert({
-          user_id: user.id,        // <- required for RLS: auth.uid() = user_id
+          created_by: user.id,
           name: companyName,
-          email: companyEmail,     // <- matches `email` column in companies table
+          admin_email: companyEmail,
         })
         .select()
         .single();
