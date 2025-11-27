@@ -45,9 +45,10 @@ const signupSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
-// convenient aliases for calling edge functions via fetch
+// still used for the workspace request edge function
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
+const SUPABASE_ANON_KEY = import.meta.env
+  .VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
 const Auth = () => {
   const [searchParams] = useSearchParams();
@@ -90,17 +91,10 @@ const Auth = () => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (session) {
-      // Check if user is verified
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("is_verified")
-        .eq("id", session.user.id)
-        .single();
 
-      if (profile?.is_verified) {
-        navigate("/dashboard");
-      }
+    // If we already have a valid session, go straight to dashboard.
+    if (session) {
+      navigate("/dashboard");
     }
   };
 
@@ -143,6 +137,7 @@ const Auth = () => {
         return;
       }
 
+      // Use Supabase's built-in email verification.
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -151,40 +146,16 @@ const Auth = () => {
             name,
             phone: fullPhone,
           },
-          emailRedirectTo: `${window.location.origin}/verify-email`,
+          // After the user confirms via Supabase email,
+          // they will be redirected back to the auth page.
+          emailRedirectTo: `${window.location.origin}/auth?mode=signin`,
         },
       });
 
       if (error) throw error;
 
       if (data.user) {
-        // ---- Send verification email via Edge Function (Resend) ----
-        const verifyRes = await fetch(
-          `${SUPABASE_URL}/functions/v1/send-verification-email`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
-            body: JSON.stringify({ userId: data.user.id, email }),
-          },
-        );
-
-        if (!verifyRes.ok) {
-          const errBody = await verifyRes.json().catch(() => ({}));
-          console.error(
-            "send-verification-email failed",
-            verifyRes.status,
-            errBody,
-          );
-          throw new Error(
-            errBody?.error || "Failed to send verification email",
-          );
-        }
-
-        // ---- If joining workspace, send workspace request ----
+        // If joining workspace, still send the workspace request email via edge function.
         if (joinWorkspace && companyName && adminEmail) {
           const wsRes = await fetch(
             `${SUPABASE_URL}/functions/v1/send-workspace-request`,
@@ -218,7 +189,8 @@ const Auth = () => {
 
         toast({
           title: "Account created!",
-          description: "Please check your email to verify your account.",
+          description:
+            "Please check your email inbox and confirm your email to sign in.",
         });
       }
     } catch (error: any) {
@@ -245,29 +217,14 @@ const Auth = () => {
       if (error) throw error;
 
       if (data.user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("is_verified, company_id")
-          .eq("id", data.user.id)
-          .single();
-
-        if (!profile?.is_verified) {
-          await supabase.auth.signOut();
-          toast({
-            title: "Email not verified",
-            description: "Please verify your email before logging in.",
-            variant: "destructive",
-          });
-          setLoading(false);
-          return;
-        }
-
+        // At this point Supabase has already enforced its own email confirmation
+        // (if enabled in Auth settings). We just navigate to the dashboard.
         navigate("/dashboard");
       }
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error.message || "Invalid login credentials",
         variant: "destructive",
       });
     } finally {
