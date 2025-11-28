@@ -8,14 +8,8 @@ const Landing = () => {
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
       <nav className="border-b border-border bg-background/80 backdrop-blur-sm">
         <div className="container mx-auto px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-primary">VisionM</h1>
+          <h1 className="text-6xl font-bold text-primary">VisionM</h1>
           <div className="flex gap-4">
-            <Button variant="ghost" onClick={() => navigate("/auth")}>
-              Sign In
-            </Button>
-            <Button onClick={() => navigate("/auth?mode=signup")}>
-              Get Started
-            </Button>
           </div>
         </div>
       </nav>

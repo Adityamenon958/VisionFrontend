@@ -11,9 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -23,80 +21,81 @@ import {
 } from "@/components/ui/select";
 import { z } from "zod";
 
+// ---------------- PHONE RULES (length + label) ----------------
+
+const phoneRules: Record<string, { length: number; label: string }> = {
+  "+1": { length: 10, label: "US" },
+  "+44": { length: 10, label: "UK" },
+  "+91": { length: 10, label: "India" },
+  "+61": { length: 9, label: "Australia" },
+  "+49": { length: 10, label: "Germany" },
+  "+33": { length: 9, label: "France" },
+};
+
+// ---------------- SIGNUP VALIDATION SCHEMA ----------------
+
 const signupSchema = z.object({
-  name: z.string().regex(/^[A-Za-z\s]+$/, "Name must contain only letters"),
+  name: z
+    .string()
+    .min(3, "Name must be at least 3 characters")
+    .max(40, "Name must be at most 40 characters")
+    .regex(/^[A-Za-z\s]+$/, "Name must contain only letters and spaces"),
   phone: z.string().min(10, "Phone number is too short"),
   email: z
     .string()
-    .email("Invalid email")
+    .email("Invalid email address")
     .refine((email) => {
       const domain = email.split("@")[1]?.toLowerCase();
       if (!domain) return false;
 
-      // TEMP RULE:
-      // - Allow any Gmail address
-      // - Allow any company domain
-      // - Block some common free providers (Yahoo, Hotmail, Outlook)
+      // Allow Gmail + company domains, block some common free ones
       if (domain === "gmail.com") return true;
-
       const blockedFreeDomains = ["yahoo.com", "hotmail.com", "outlook.com"];
       return !blockedFreeDomains.includes(domain);
     }, "Please use Gmail or a company email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
-// still used for the workspace request edge function
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env
-  .VITE_SUPABASE_PUBLISHABLE_KEY as string;
+type SignupErrors = {
+  name?: string;
+  email?: string;
+  phone?: string;
+  password?: string;
+};
 
 const Auth = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
+
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">(
     (searchParams.get("mode") as "signin" | "signup" | "forgot") || "signin",
   );
 
-  // Signup form
+  // ---------------- SIGNUP STATE ----------------
   const [name, setName] = useState("");
-  const [countryCode, setCountryCode] = useState("+1");
+  const [countryCode, setCountryCode] = useState("+91"); // default India
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [joinWorkspace, setJoinWorkspace] = useState(false);
-  const [companyName, setCompanyName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
 
-  // Signin form
+  const [signupErrors, setSignupErrors] = useState<SignupErrors>({});
+  const [signupTouched, setSignupTouched] = useState<SignupErrors>({});
+
+  // ---------------- SIGNIN STATE ----------------
   const [signinEmail, setSigninEmail] = useState("");
   const [signinPassword, setSigninPassword] = useState("");
 
-  // Forgot password
+  // ---------------- FORGOT PASSWORD STATE ----------------
   const [resetEmail, setResetEmail] = useState("");
 
-  // Password strength
+  // ---------------- PASSWORD STRENGTH ----------------
   const [passwordStrength, setPasswordStrength] = useState(0);
-
-  useEffect(() => {
-    checkUser();
-  }, []);
 
   useEffect(() => {
     calculatePasswordStrength(password);
   }, [password]);
-
-  const checkUser = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    // If we already have a valid session, go straight to dashboard.
-    if (session) {
-      navigate("/dashboard");
-    }
-  };
 
   const calculatePasswordStrength = (pwd: string) => {
     let strength = 0;
@@ -114,30 +113,72 @@ const Auth = () => {
     return "bg-success";
   };
 
+  // ---------------- LIVE SIGNUP VALIDATION ----------------
+  useEffect(() => {
+    const fullPhone = countryCode + phone;
+
+    const result = signupSchema.safeParse({
+      name,
+      phone: fullPhone,
+      email,
+      password,
+    });
+
+    const fieldErrors: SignupErrors = {};
+
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as keyof SignupErrors;
+        fieldErrors[field] = issue.message;
+      }
+    }
+
+    // extra phone length validation per country
+    const digits = phone.replace(/\D/g, "");
+    const rule = phoneRules[countryCode];
+
+    if (rule) {
+      if (digits.length !== rule.length) {
+        fieldErrors.phone = `Phone number must be ${rule.length} digits for ${rule.label}`;
+      }
+    }
+
+    setSignupErrors(fieldErrors);
+  }, [name, email, phone, password, countryCode]);
+
+  const isSignupValid =
+    name &&
+    email &&
+    phone &&
+    password &&
+    Object.keys(signupErrors).length === 0;
+
+  // ---------------- HANDLERS ----------------
+
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    setSignupTouched({
+      name: true,
+      email: true,
+      phone: true,
+      password: true,
+    });
+
+    if (!isSignupValid) {
+      toast({
+      title: "Please check your details",
+      description: "Fix the highlighted errors before signing up.",
+      variant: "destructive",
+    });
+      return;
+    }
+
     setLoading(true);
 
     try {
       const fullPhone = countryCode + phone;
-      const validation = signupSchema.safeParse({
-        name,
-        phone: fullPhone,
-        email,
-        password,
-      });
 
-      if (!validation.success) {
-        toast({
-          title: "Validation Error",
-          description: validation.error.errors[0].message,
-          variant: "destructive",
-        });
-        setLoading(false);
-        return;
-      }
-
-      // Use Supabase's built-in email verification.
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -146,56 +187,43 @@ const Auth = () => {
             name,
             phone: fullPhone,
           },
-          // After the user confirms via Supabase email,
-          // they will be redirected back to the auth page.
-          emailRedirectTo: `${window.location.origin}/auth?mode=signin`,
+          emailRedirectTo: `${window.location.origin}/verify-email`,
         },
       });
 
-      if (error) throw error;
+      console.log("signUp response:", { data, error });
 
-      if (data.user) {
-        // If joining workspace, still send the workspace request email via edge function.
-        if (joinWorkspace && companyName && adminEmail) {
-          const wsRes = await fetch(
-            `${SUPABASE_URL}/functions/v1/send-workspace-request`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: SUPABASE_ANON_KEY,
-                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              },
-              body: JSON.stringify({
-                userId: data.user.id,
-                companyName,
-                adminEmail,
-              }),
-            },
-          );
-
-          if (!wsRes.ok) {
-            const errBody = await wsRes.json().catch(() => ({}));
-            console.error(
-              "send-workspace-request failed",
-              wsRes.status,
-              errBody,
-            );
-            throw new Error(
-              errBody?.error || "Failed to send workspace request",
-            );
-          }
-        }
-
-        toast({
-          title: "Account created!",
-          description:
-            "Please check your email inbox and confirm your email to sign in.",
-        });
+      if (error) {
+        throw error;
       }
-    } catch (error: any) {
+
+      if (
+      data?.user &&
+      Array.isArray((data.user as any).identities) &&
+      (data.user as any).identities.length === 0
+    ) {
       toast({
-        title: "Error",
+        title: "Account already exists",
+        description:
+          "An account with this email already exists. Please sign in instead.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+      toast({
+        title: "verification email sent",
+        description:
+          "Please check your email inbox and confirm your email to sign in.",
+      });
+    } catch (error: any) {
+      let message = error.message;
+      
+      if (message?.includes("User already")) {
+        message = "An account with this email already exists. Please sign in instead.";
+  }
+      toast({
+        title: "signup failed",
         description: error.message || "Something went wrong",
         variant: "destructive",
       });
@@ -214,17 +242,23 @@ const Auth = () => {
         password: signinPassword,
       });
 
-      if (error) throw error;
+      console.log("signIn response:", { data, error });
 
-      if (data.user) {
-        // At this point Supabase has already enforced its own email confirmation
-        // (if enabled in Auth settings). We just navigate to the dashboard.
-        navigate("/dashboard");
+      if (error) {
+        throw error;
       }
+
+      if (!data?.user) {
+        throw new Error("Login failed. Please check your credentials.");
+      }
+
+      navigate("/dashboard");
     } catch (error: any) {
+      console.error("Sign in error:", error);
       toast({
-        title: "Error",
-        description: error.message || "Invalid login credentials",
+        title: "Sign in failed",
+        description:
+          error?.message || "Invalid email or password. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -238,7 +272,7 @@ const Auth = () => {
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-        redirectTo: `${window.location.origin}/auth`,
+        redirectTo: `${window.location.origin}/reset-password`,
       });
 
       if (error) throw error;
@@ -247,10 +281,12 @@ const Auth = () => {
         title: "Password reset email sent",
         description: "Check your email for the reset link.",
       });
+
+      setMode("signin");
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message,
+        description: error.message || "Something went wrong",
         variant: "destructive",
       });
     } finally {
@@ -258,206 +294,251 @@ const Auth = () => {
     }
   };
 
+  // ---------------- HEADER TEXT ----------------
+
+  const headerTitle =
+    mode === "signup"
+      ? "Create an account"
+      : mode === "signin"
+      ? "Welcome back"
+      : "Forgot password?";
+
+  const headerDescription =
+    mode === "signup"
+      ? "Enter your details to get started."
+      : mode === "signin"
+      ? "Sign in to your account to continue."
+      : "Enter your email to receive a password reset link";
+
+  // ---------------- RENDER ----------------
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl text-center">VisionM</CardTitle>
-          <CardDescription className="text-center">
-            {mode === "signup" && "Create your account"}
-            {mode === "signin" && "Sign in to your account"}
-            {mode === "forgot" && "Reset your password"}
-          </CardDescription>
+      <Card className="w-full max-w-lg shadow-lg border border-border/70">
+        <CardHeader className="text-center space-y-1">
+          <CardTitle className="text-3xl font-bold">{headerTitle}</CardTitle>
+          <CardDescription>{headerDescription}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Tabs value={mode} onValueChange={(v) => setMode(v as any)}>
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="signin">Sign In</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-              <TabsTrigger value="forgot">Forgot</TabsTrigger>
-            </TabsList>
 
-            <TabsContent value="signin">
-              <form onSubmit={handleSignin} className="space-y-4">
-                <div>
-                  <Label htmlFor="signin-email">Email</Label>
+        <CardContent className="space-y-6">
+          {/* SIGN UP */}
+          {mode === "signup" && (
+            <form onSubmit={handleSignup} className="space-y-4">
+              <div>
+                <Label htmlFor="name">Full Name</Label>
+                <Input
+                  id="name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onBlur={() =>
+                    setSignupTouched((prev) => ({ ...prev, name: true }))
+                  }
+                  placeholder="Your full name"
+                />
+                {signupTouched.name && signupErrors.name && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {signupErrors.name}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="email">Business Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onBlur={() =>
+                    setSignupTouched((prev) => ({ ...prev, email: true }))
+                  }
+                  placeholder="you@company.com"
+                />
+                {signupTouched.email && signupErrors.email && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {signupErrors.email}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="phone">Phone Number</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={countryCode}
+                    onValueChange={(value) => setCountryCode(value)}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="+1">US +1</SelectItem>
+                      <SelectItem value="+44">UK +44</SelectItem>
+                      <SelectItem value="+91">IN +91</SelectItem>
+                      <SelectItem value="+61">AU +61</SelectItem>
+                      <SelectItem value="+49">DE +49</SelectItem>
+                      <SelectItem value="+33">FR +33</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Input
-                    id="signin-email"
-                    type="email"
-                    value={signinEmail}
-                    onChange={(e) => setSigninEmail(e.target.value)}
-                    required
+                    id="phone"
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    onBlur={() =>
+                      setSignupTouched((prev) => ({ ...prev, phone: true }))
+                    }
+                    placeholder=""
                   />
                 </div>
-                <div>
-                  <Label htmlFor="signin-password">Password</Label>
-                  <Input
-                    id="signin-password"
-                    type="password"
-                    value={signinPassword}
-                    onChange={(e) => setSigninPassword(e.target.value)}
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "Signing in..." : "Sign In"}
-                </Button>
-              </form>
-            </TabsContent>
+                {signupTouched.phone && signupErrors.phone && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {signupErrors.phone}
+                  </p>
+                )}
+              </div>
 
-            <TabsContent value="signup">
-              <form onSubmit={handleSignup} className="space-y-4">
-                <div>
-                  <Label htmlFor="name">Full Name</Label>
-                  <Input
-                    id="name"
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="John Doe"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="phone">Phone Number</Label>
-                  <div className="flex gap-2">
-                    <Select value={countryCode} onValueChange={setCountryCode}>
-                      <SelectTrigger className="w-24">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="+1">+1 (US)</SelectItem>
-                        <SelectItem value="+44">+44 (UK)</SelectItem>
-                        <SelectItem value="+91">+91 (IN)</SelectItem>
-                        <SelectItem value="+86">+86 (CN)</SelectItem>
-                        <SelectItem value="+81">+81 (JP)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      id="phone"
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="1234567890"
-                      required
+              <div>
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onBlur={() =>
+                    setSignupTouched((prev) => ({ ...prev, password: true }))
+                  }
+                />
+                {signupTouched.password && signupErrors.password && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {signupErrors.password}
+                  </p>
+                )}
+                <div className="mt-2 space-y-1">
+                  <div className="flex gap-1 h-2 rounded-full overflow-hidden bg-muted">
+                    <div
+                      className={getPasswordColor()}
+                      style={{ width: `${passwordStrength}%` }}
+                    />
+                    <div
+                      className="bg-muted"
+                      style={{ width: `${100 - passwordStrength}%` }}
                     />
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Password strength:{" "}
+                    {passwordStrength < 30
+                      ? "Weak"
+                      : passwordStrength < 60
+                      ? "Medium"
+                      : "Strong"}
+                  </p>
                 </div>
+              </div>
 
-                <div>
-                  <Label htmlFor="email">Company Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@company.com"
-                    required
-                  />
-                </div>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading || !isSignupValid}
+              >
+                {loading ? "Signing up..." : "Sign Up"}
+              </Button>
 
-                <div>
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                  <div className="mt-2 space-y-1">
-                    <div className="flex gap-1 h-2">
-                      <div
-                        className={`flex-1 rounded ${getPasswordColor()}`}
-                        style={{ width: `${passwordStrength}%` }}
-                      />
-                      <div
-                        className="flex-1 rounded bg-muted"
-                        style={{ width: `${100 - passwordStrength}%` }}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Password strength:{" "}
-                      {passwordStrength < 30
-                        ? "Weak"
-                        : passwordStrength < 60
-                        ? "Medium"
-                        : "Strong"}
-                    </p>
-                  </div>
-                </div>
+              <p className="text-sm text-center text-muted-foreground">
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("signin")}
+                  className="text-primary hover:underline"
+                >
+                  Sign in
+                </button>
+              </p>
+            </form>
+          )}
 
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="join-workspace"
-                    checked={joinWorkspace}
-                    onCheckedChange={(checked) =>
-                      setJoinWorkspace(checked as boolean)
-                    }
-                  />
-                  <Label
-                    htmlFor="join-workspace"
-                    className="text-sm font-normal"
-                  >
-                    Join existing workspace
-                  </Label>
-                </div>
+          {/* SIGN IN */}
+          {mode === "signin" && (
+            <form onSubmit={handleSignin} className="space-y-5">
+              <div>
+                <Label>Business Email</Label>
+                <Input
+                  type="email"
+                  placeholder="you@company.com"
+                  value={signinEmail}
+                  onChange={(e) => setSigninEmail(e.target.value)}
+                  required
+                />
+              </div>
 
-                {joinWorkspace && (
-                  <div className="space-y-4 pl-6 border-l-2 border-border">
-                    <div>
-                      <Label htmlFor="company">Company Name</Label>
-                      <Input
-                        id="company"
-                        value={companyName}
-                        onChange={(e) => setCompanyName(e.target.value)}
-                        placeholder="Company Inc."
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="admin-email">Admin Email</Label>
-                      <Input
-                        id="admin-email"
-                        type="email"
-                        value={adminEmail}
-                        onChange={(e) => setAdminEmail(e.target.value)}
-                        placeholder="admin@company.com"
-                      />
-                    </div>
-                  </div>
-                )}
+              <div>
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  placeholder="Enter your password"
+                  value={signinPassword}
+                  onChange={(e) => setSigninPassword(e.target.value)}
+                  required
+                />
+              </div>
 
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "Creating account..." : "Create Account"}
-                </Button>
-              </form>
-            </TabsContent>
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={() => setMode("forgot")}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
 
-            <TabsContent value="forgot">
-              <form onSubmit={handleForgotPassword} className="space-y-4">
-                <div>
-                  <Label htmlFor="reset-email">Email</Label>
-                  <Input
-                    id="reset-email"
-                    type="email"
-                    value={resetEmail}
-                    onChange={(e) => setResetEmail(e.target.value)}
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "Sending..." : "Send Reset Link"}
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
+              <Button className="w-full" type="submit" disabled={loading}>
+                {loading ? "Signing in..." : "Sign In"}
+              </Button>
 
-          <div className="mt-4 text-center">
-            <Button variant="link" onClick={() => navigate("/")}>
-              Back to Home
-            </Button>
-          </div>
+              <p className="text-sm text-center text-muted-foreground">
+                Don&apos;t have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("signup")}
+                  className="text-primary hover:underline"
+                >
+                  Sign up
+                </button>
+              </p>
+            </form>
+          )}
+
+          {/* FORGOT PASSWORD */}
+          {mode === "forgot" && (
+            <form onSubmit={handleForgotPassword} className="space-y-5">
+              <div>
+                <Label>Business Email</Label>
+                <Input
+                  type="email"
+                  placeholder="you@company.com"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  required
+                />
+              </div>
+
+              <Button className="w-full" type="submit" disabled={loading}>
+                {loading ? "Sending..." : "Send Reset Link"}
+              </Button>
+
+              <p className="text-sm text-center text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={() => setMode("signin")}
+                  className="text-primary hover:underline"
+                >
+                  ← Back to Sign In
+                </button>
+              </p>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>

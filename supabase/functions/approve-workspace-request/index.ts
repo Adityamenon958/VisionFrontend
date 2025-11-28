@@ -1,8 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { Resend } from "https://esm.sh/resend@4.0.0";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const frontendUrl = Deno.env.get("FRONTEND_URL")!; // e.g. http://localhost:5173
+const resend = new Resend(Deno.env.get("RESEND_API_KEY")!);
 
 const handler = async (req: Request): Promise<Response> => {
   try {
@@ -15,7 +18,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Get request
+    // 1) Get join request
     const { data: request, error: fetchError } = await supabase
       .from("workspace_join_requests")
       .select("*")
@@ -26,7 +29,7 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response("Request not found", { status: 404 });
     }
 
-    // Update request status
+    // 2) Update request status to approved
     const { error: updateError } = await supabase
       .from("workspace_join_requests")
       .update({ status: "approved" })
@@ -34,7 +37,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     if (updateError) throw updateError;
 
-    // Find or create company
+    // 3) Find or create company
     const { data: existingCompany } = await supabase
       .from("companies")
       .select("id")
@@ -42,10 +45,9 @@ const handler = async (req: Request): Promise<Response> => {
       .eq("admin_email", request.admin_email)
       .single();
 
-    let companyId = existingCompany?.id;
+    let companyId = existingCompany?.id as string | undefined;
 
     if (!companyId) {
-      // Create company
       const { data: newCompany, error: companyError } = await supabase
         .from("companies")
         .insert({
@@ -60,7 +62,7 @@ const handler = async (req: Request): Promise<Response> => {
       companyId = newCompany.id;
     }
 
-    // Update user profile
+    // 4) Update user profile with company_id
     const { error: profileError } = await supabase
       .from("profiles")
       .update({ company_id: companyId })
@@ -68,6 +70,39 @@ const handler = async (req: Request): Promise<Response> => {
 
     if (profileError) throw profileError;
 
+    // 5) Fetch user email + name for notification
+    const { data: profile, error: profileFetchError } = await supabase
+      .from("profiles")
+      .select("name, email")
+      .eq("id", request.user_id)
+      .single();
+
+    if (profileFetchError) {
+      console.error("Could not fetch profile for email:", profileFetchError);
+    } else if (profile?.email) {
+      const workspaceLink = `${frontendUrl}/dashboard`; // or /app/workspace etc.
+
+      // 6) Send approval email to user
+      await resend.emails.send({
+        from: "VisionM <no-reply@visionm.com>",
+        to: [profile.email],
+        subject: "Workspace Access Approved",
+        html: `
+          <h1>Access Approved</h1>
+          <p>Hi ${profile.name ?? ""},</p>
+          <p>Your request to join the workspace for <strong>${request.company_name}</strong> has been approved.</p>
+          <p>You can access your workspace using the link below:</p>
+          <p>
+            <a href="${workspaceLink}" style="display:inline-block;padding:12px 24px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:4px;">
+              Open Workspace
+            </a>
+          </p>
+          <p>If you did not request this, please ignore this email.</p>
+        `,
+      });
+    }
+
+    // 7) HTML page shown to the admin
     return new Response(
       `
       <!DOCTYPE html>
@@ -82,7 +117,7 @@ const handler = async (req: Request): Promise<Response> => {
         <body>
           <div class="success">✓</div>
           <h1>Workspace Request Approved</h1>
-          <p>The user has been added to the workspace.</p>
+          <p>The user has been added to the workspace and notified by email.</p>
         </body>
       </html>
       `,
