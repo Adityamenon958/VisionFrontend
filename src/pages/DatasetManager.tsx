@@ -13,6 +13,9 @@ import {
 } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const apiUrl = (path: string) => `${API_BASE_URL}${path}`;
+
 type UploadStatus = "idle" | "uploading" | "processing" | "ready" | "failed";
 
 interface FolderStats {
@@ -217,9 +220,10 @@ const DatasetManager = () => {
           } = await supabase.auth.getSession();
           const token = session?.access_token;
 
-          const res = await fetch(`/api/dataset/${datasetId}/status`, {
+          const res = await fetch(apiUrl(`/dataset/${datasetId}/status`), {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           });
+
 
           if (!res.ok) {
             throw new Error(`Status check failed with ${res.status}`);
@@ -235,11 +239,10 @@ const DatasetManager = () => {
               setUploadStatus("ready");
               setStatusMessage("Dataset is ready.");
 
-              const metaRes = await fetch(`/api/dataset/${datasetId}`, {
-                headers: token
-                  ? { Authorization: `Bearer ${token}` }
-                  : undefined,
+              const metaRes = await fetch(apiUrl(`/dataset/${datasetId}`), {
+                headers: token ? { Authorization: `Bearer ${token}` } : undefined,
               });
+
 
               if (metaRes.ok) {
                 const metaJson = await metaRes.json();
@@ -307,11 +310,12 @@ const DatasetManager = () => {
       } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch("/api/dataset/upload", {
+      const res = await fetch(apiUrl("/dataset/upload"), {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: formData,
       });
+
 
       if (!res.ok) {
         throw new Error(`Upload failed with status ${res.status}`);
