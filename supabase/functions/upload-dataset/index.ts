@@ -36,8 +36,25 @@ const handler = async (req: Request): Promise<Response> => {
     const version = form.fields.version || null;
     const files = form.files?.files || [];
 
-    if (!Array.isArray(files)) {
+    if (!Array.isArray(files) || files.length === 0) {
       throw new Error("No files provided");
+    }
+
+    // --- NEW: parse fileMeta with folder paths ---
+    let fileMeta: Array<{ originalName?: string; folder?: string }> = [];
+    const rawFileMeta = form.fields.fileMeta;
+
+    if (rawFileMeta) {
+      try {
+        const parsed = JSON.parse(rawFileMeta);
+        if (Array.isArray(parsed)) {
+          fileMeta = parsed;
+        } else {
+          console.warn("fileMeta is not an array, ignoring");
+        }
+      } catch (e) {
+        console.warn("Failed to parse fileMeta JSON:", e);
+      }
     }
 
     // Create dataset record
@@ -59,9 +76,26 @@ const handler = async (req: Request): Promise<Response> => {
     let totalSize = 0;
     let totalImages = 0;
 
-    for (const file of files) {
-      const fileName = file.filename || `file-${Date.now()}`;
-      const filePath = `${companyId}/${projectId}/${dataset.id}/${fileName}`;
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      const fileName = file.filename || `file-${Date.now()}-${index}`;
+
+      // Match fileMeta by index (same order as FormData append on frontend)
+      const meta = fileMeta[index] ?? {};
+      let folder = (meta.folder || "").trim();
+
+      // Normalize folder path
+      // - remove leading/trailing slashes
+      // - if empty, use "dataset" as default
+      folder = folder.replace(/^\/+|\/+$/g, "");
+      if (!folder) {
+        folder = "dataset";
+      }
+
+      // Storage path now preserves folder structure:
+      // company/project/datasetId/<folder>/fileName
+      const folderPrefix = folder ? `${folder}/` : "";
+      const filePath = `${companyId}/${projectId}/${dataset.id}/${folderPrefix}${fileName}`;
 
       // Upload to storage
       const { error: uploadError } = await supabase.storage
@@ -82,6 +116,9 @@ const handler = async (req: Request): Promise<Response> => {
         file_type: file.contentType || "application/octet-stream",
         file_size: file.content.length,
         storage_path: filePath,
+        // optional fields if your table supports them:
+        folder_path: folder,
+        original_name: meta.originalName ?? fileName,
       });
 
       totalSize += file.content.length;

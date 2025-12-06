@@ -1,107 +1,239 @@
+// src/pages/Dashboard.tsx
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
-import { JoinCompanyDialog } from "@/components/JoinCompanyDialog";
+import { useToast } from "@/hooks/use-toast";
+import CompanyMembers from "@/components/CompanyMembers";
+import { FormFieldWrapper } from "@/components/FormFieldWrapper";
+import { useFormValidation } from "@/hooks/useFormValidation";
+import {
+  companyDetailsSchema,
+  projectSchema,
+  type CompanyDetailsFormData,
+  type ProjectFormData,
+} from "@/lib/validations/authSchemas";
+import { useProfile } from "@/contexts/ProfileContext";
+import { PageHeader } from "@/components/pages/PageHeader";
+import { EmptyState } from "@/components/pages/EmptyState";
+import { LoadingState } from "@/components/pages/LoadingState";
+import { FolderKanban, Plus } from "lucide-react";
 
-type ViewMode = "overview" | "projects" | "simulation";
+type ViewMode = "overview" | "projects" | "simulation" | "members";
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
+  const { profile, user, isAdmin: contextIsAdmin, reloadProfile, loading: profileLoading } = useProfile();
 
-  const [user, setUser] = useState<any>(null);
-  const [profile, setProfile] = useState<any>(null);
   const [projects, setProjects] = useState<any[]>([]);
   const [showCompanyDialog, setShowCompanyDialog] = useState(false);
   const [showProjectDialog, setShowProjectDialog] = useState(false);
-  const [companyName, setCompanyName] = useState("");
-  const [companyEmail, setCompanyEmail] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [projectDescription, setProjectDescription] = useState("");
+  const [showCompanyExistsDialog, setShowCompanyExistsDialog] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [joinRequestLoading, setJoinRequestLoading] = useState(false);
+  const [dialogMode, setDialogMode] = useState<"create" | "join">("create");
 
-  // sidebar state
+  // Company Details Form Validation
+  const companyForm = useFormValidation({
+    schema: companyDetailsSchema,
+    initialValues: {
+      companyName: "",
+      businessEmail: "",
+    },
+    validateOnChange: false,
+    validateOnBlur: true,
+  });
+
+  // Project Form Validation
+  const projectForm = useFormValidation({
+    schema: projectSchema,
+    initialValues: {
+      projectName: "",
+      projectDescription: "",
+    },
+    validateOnChange: false,
+    validateOnBlur: true,
+  });
+
+  // sidebar state (kept for internal logic)
   const [activeView, setActiveView] = useState<ViewMode>("overview");
-  const [projectMenuOpen, setProjectMenuOpen] = useState(true);
 
+  // Auth check is handled by ProfileContext and AppShell
+  // No need for redundant checks here
+
+  // Handle invite token from URL
   useEffect(() => {
-    checkAuth();
-  }, []);
-
-  const checkAuth = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      navigate("/auth");
-      return;
+    const inviteToken = searchParams.get("invite") ?? searchParams.get("project_invite");
+    if (inviteToken && user && !profileLoading) {
+      handleInviteAcceptance(inviteToken);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, searchParams, profileLoading]);
 
-    setUser(session.user);
-    loadProfile(session.user.id);
-  };
+  // Handle URL action parameter (e.g., ?action=create-project)
+  useEffect(() => {
+    const action = searchParams.get("action");
+    
+    if (action === "create-project" && profile?.company_id) {
+      setShowProjectDialog(true);
+      // Clear the action param from URL
+      setSearchParams({});
+    } else if (action === "join-company") {
+      setDialogMode("join");
+      setShowCompanyDialog(true);
+      companyForm.resetForm();
+      // Clear the action param from URL
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("action");
+      setSearchParams(newParams);
+    } else if (action === "create-company") {
+      setDialogMode("create");
+      setShowCompanyDialog(true);
+      companyForm.resetForm();
+      // Clear the action param from URL
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("action");
+      setSearchParams(newParams);
+    }
+  }, [searchParams, profile, setSearchParams, companyForm]);
 
-  const loadProfile = async (userId: string) => {
-    const { data: profileData, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .maybeSingle();
+  const handleInviteAcceptance = async (inviteToken: string) => {
+    if (!user) return;
 
-    if (error) {
-      console.error("Error fetching profile:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load your profile.",
-        variant: "destructive",
+    try {
+      // Validate invite first
+      const validateRes = await fetch(`/functions/v1/validate-invite?token=${encodeURIComponent(inviteToken)}`);
+      const validateJson = await validateRes.json();
+
+      if (!validateRes.ok || !validateJson?.ok) {
+        // Invalid invite - clear token and continue normal flow
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("invite");
+        newParams.delete("project_invite");
+        setSearchParams(newParams);
+        return;
+      }
+
+      const invite = validateJson.invite;
+      if (!invite || invite.status !== "pending") {
+        return;
+      }
+
+      // Check if user's email matches invite email
+      const userEmail = user.email;
+      if (userEmail !== invite.email) {
+        toast({
+          title: "Invite email mismatch",
+          description: "This invite is for a different email address.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Accept the invite
+      const acceptRes = await fetch("/functions/v1/accept-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: inviteToken, userId: user.id }),
       });
-      return;
-    }
 
-    // No profile yet → ask for company details
-    if (!profileData) {
-      console.log("No profile found yet for this user.");
-      setShowCompanyDialog(true);
-      return;
-    }
-
-    // Profile exists
-    if (profileData.company_id) {
-      const { data: companyData } = await supabase
-        .from("companies")
-        .select("*")
-        .eq("id", profileData.company_id)
-        .single();
-
-      setProfile({ ...profileData, companies: companyData });
-      loadProjects(profileData.company_id);
-    } else {
-      setProfile(profileData);
-      setShowCompanyDialog(true);
+      const acceptJson = await acceptRes.json();
+      if (acceptRes.ok && acceptJson?.ok) {
+        toast({
+          title: "Invite accepted",
+          description: "You have been added to the company.",
+        });
+        // Clear invite token from URL
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("invite");
+        newParams.delete("project_invite");
+        setSearchParams(newParams);
+        // Reload profile to get updated company_id
+        await reloadProfile();
+      } else {
+        toast({
+          title: "Failed to accept invite",
+          description: acceptJson?.error || "Please try again.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error handling invite:", error);
     }
   };
+
+  const checkForValidInvite = async (): Promise<boolean> => {
+    const inviteToken = searchParams.get("invite") ?? searchParams.get("project_invite");
+    if (!inviteToken) return false;
+
+    try {
+      const res = await fetch(`/functions/v1/validate-invite?token=${encodeURIComponent(inviteToken)}`);
+      const json = await res.json();
+      if (res.ok && json?.ok && json.invite?.status === "pending") {
+        // Check if email matches
+        const userEmail = user?.email;
+        return userEmail === json.invite.email;
+      }
+    } catch (error) {
+      console.error("Error checking invite:", error);
+    }
+    return false;
+  };
+
+  // Load projects when profile/company changes (optimized: don't wait for profileLoading to be false)
+  useEffect(() => {
+    if (profile?.company_id) {
+      // Load projects as soon as company_id is available (parallel with other operations)
+      loadProjects(profile.company_id);
+    }
+  }, [profile?.company_id]);
+
+  // Show company dialog if user has no company and no valid invite
+  useEffect(() => {
+    if (!profileLoading && !profile?.company_id) {
+      let cancelled = false;
+      checkForValidInvite().then((hasValidInvite) => {
+        if (!cancelled && !hasValidInvite) {
+          setDialogMode("create");
+          setShowCompanyDialog(true);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileLoading, profile?.company_id]);
+
+  // Listen for "View Members" button click from Sidebar (backward compatibility)
+  useEffect(() => {
+    const handleShowMembers = () => {
+      // Use contextIsAdmin directly instead of isAdmin variable
+      if (contextIsAdmin && profile?.company_id) {
+        // Navigate to members page instead of changing view
+        navigate("/dashboard/team/members");
+      }
+    };
+
+    window.addEventListener("showMembersView", handleShowMembers);
+    return () => {
+      window.removeEventListener("showMembersView", handleShowMembers);
+    };
+  }, [contextIsAdmin, profile?.company_id, navigate]);
 
   const loadProjects = async (companyId: string) => {
     const { data } = await supabase
@@ -110,17 +242,15 @@ const Dashboard = () => {
       .eq("company_id", companyId)
       .order("created_at", { ascending: false });
 
-    if (data) {
-      setProjects(data);
-    }
+    if (data) setProjects(data);
   };
 
-  // Create / update company AND link profile.company_id
+
   const handleSaveCompany = async () => {
-    if (!companyName || !companyEmail) {
+    if (!companyForm.validateForm()) {
       toast({
-        title: "Error",
-        description: "Please fill in all fields",
+        title: "Please check your details",
+        description: "Fix the highlighted errors before saving company details.",
         variant: "destructive",
       });
       return;
@@ -137,46 +267,141 @@ const Dashboard = () => {
 
     setLoading(true);
 
+    const companyName = companyForm.values.companyName;
+    const businessEmail = companyForm.values.businessEmail;
+
     try {
-      // 1) Create company
-      const { data: company, error: companyError } = await supabase
+      // Check if company already exists
+      const { data: existingCompany, error: checkError } = await supabase
+        .from("companies")
+        .select("*")
+        .eq("name", companyName)
+        .maybeSingle();
+
+      if (checkError) {
+        console.error("Error checking existing company:", checkError);
+        // Continue with creation attempt even if check fails
+      }
+
+      if (existingCompany) {
+        // Company exists - show confirmation dialog
+        // Store the existing company's admin_email for the join request
+        setLoading(false);
+        setShowCompanyExistsDialog(true);
+        return;
+      }
+
+      // Company doesn't exist - create it and assign user as admin
+      // Get user's email (from auth user or profile)
+      const userEmail = user.email || profile?.email;
+      
+      // Ensure profile exists before creating company (required for foreign key)
+      if (!profile) {
+        // Create profile if it doesn't exist
+        const { error: profileError } = await supabase
+          .from("profiles")
+          .upsert({
+            id: user.id,
+            name: user.user_metadata?.name || "",
+            phone: user.user_metadata?.phone || "",
+            email: userEmail || "",
+          }, {
+            onConflict: "id",
+          });
+        
+        if (profileError) {
+          console.error("Error creating profile:", profileError);
+          throw new Error("Failed to create profile. Please try again.");
+        }
+        
+        // Profile will be reloaded via context after company creation
+      }
+      
+      const { data: company, error: insertError } = await supabase
         .from("companies")
         .insert({
-          user_id: user.id,
           name: companyName,
-          email: companyEmail,
+          admin_email: userEmail, // user's email = admin
+          created_by: user.id, // use created_by to match database schema
         })
         .select()
         .single();
 
-      if (companyError) throw companyError;
+      if (insertError) {
+        console.error("Full Supabase error:", {
+          message: insertError.message,
+          details: insertError.details,
+          hint: insertError.hint,
+          code: insertError.code,
+          error: insertError,
+        });
+        throw insertError;
+      }
 
-      // 2) Ensure profile row exists and link to this company
-      const { data: profileRow, error: profileError } = await supabase
+      if (!company) {
+        throw new Error("Failed to create company");
+      }
+
+      // Update profile with company_id
+      const { data: profileRow, error: profileUpdateError } = await supabase
         .from("profiles")
-        .upsert({
-          id: user.id,
+        .update({
           company_id: company.id,
         })
+        .eq("id", user.id)
         .select()
         .single();
 
-      if (profileError) throw profileError;
-
-      // 3) Update local state and enable projects
-      setProfile({ ...profileRow, companies: company });
+      if (profileUpdateError) {
+        console.error("Error updating profile with company_id:", profileUpdateError);
+        // Company was created but profile update failed - try to reload profile
+        const { data: reloadedProfile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle();
+        
+        toast({
+          title: "Warning",
+          description: "Company created but profile update had issues. Please refresh the page.",
+          variant: "destructive",
+        });
+      } else {
+        // Profile updated successfully
+      }
       setShowCompanyDialog(false);
-      loadProjects(company.id);
+      companyForm.resetForm();
+      // Reload profile to get updated company_id
+      await reloadProfile();
+      if (company?.id) {
+        loadProjects(company.id);
+      }
 
       toast({
-        title: "Company details saved",
+        title: "Company details saved successfully",
         description: "Your company has been created successfully.",
       });
     } catch (error: any) {
-      console.error("Error saving company:", error);
+      console.error("Error saving company - Full error object:", error);
+      console.error("Error details:", {
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+        code: error?.code,
+        status: error?.status,
+        statusText: error?.statusText,
+      });
+      
+      // Show more detailed error message
+      const errorMessage = 
+        error?.details || 
+        error?.hint || 
+        error?.message || 
+        "Failed to save company.";
+      
       toast({
-        title: "Error",
-        description: error.message ?? "Failed to save company.",
+        title: "Company details failed",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -184,13 +409,163 @@ const Dashboard = () => {
     }
   };
 
+  const handleCreateJoinRequest = async () => {
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "No authenticated user found.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!companyForm.validateForm()) {
+      toast({
+        title: "Please check your details",
+        description: "Fix the highlighted errors before sending join request.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setJoinRequestLoading(true);
+    try {
+      const companyName = companyForm.values.companyName;
+      
+      // Get the existing company to get the actual admin_email
+      const { data: existingCompany } = await supabase
+        .from("companies")
+        .select("admin_email")
+        .eq("name", companyName)
+        .maybeSingle();
+
+      if (!existingCompany) {
+        throw new Error("Company not found");
+      }
+
+      // Get user profile to get email
+      const { data: profileData, error: profileError } = await supabase
+        .from("profiles")
+        .select("email, name")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) {
+        throw profileError;
+      }
+
+      if (!profileData) {
+        throw new Error("Profile not found");
+      }
+
+      // Create join request via edge function using the actual admin_email from the company
+      const { error } = await supabase.functions.invoke("send-workspace-request", {
+        body: {
+          userId: user.id,
+          companyName: companyName,
+          adminEmail: existingCompany.admin_email, // Use actual admin email from company, not form input
+        },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Request sent successfully",
+        description: "The workspace admin has been notified by email.",
+      });
+
+      setShowCompanyExistsDialog(false);
+      // Keep company dialog open (user not yet in company)
+    } catch (error: any) {
+      console.error("Error creating join request:", error);
+      toast({
+        title: "Join request failed",
+        description: error.message ?? "Failed to send join request.",
+        variant: "destructive",
+      });
+    } finally {
+      setJoinRequestLoading(false);
+    }
+  };
+
+  const handleJoinCompany = async () => {
+    if (!companyForm.validateForm()) {
+      toast({
+        title: "Please check your details",
+        description: "Fix the highlighted errors before joining company.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "No authenticated user found.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setJoinRequestLoading(true);
+    try {
+      const companyName = companyForm.values.companyName;
+      
+      // Check if company exists by name
+      const { data: existingCompany } = await supabase
+        .from("companies")
+        .select("admin_email")
+        .eq("name", companyName)
+        .maybeSingle();
+
+      if (!existingCompany) {
+        toast({
+          title: "Company not found",
+          description: `Company "${companyName}" not found. Please check the company name or create a new company.`,
+          variant: "destructive",
+        });
+        setJoinRequestLoading(false);
+        return;
+      }
+
+      // Send join request
+      const { error } = await supabase.functions.invoke("send-workspace-request", {
+        body: {
+          userId: user.id,
+          companyName: companyName,
+          adminEmail: existingCompany.admin_email,
+        },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Request sent successfully",
+        description: "The workspace admin has been notified by email.",
+      });
+
+      setShowCompanyDialog(false);
+      companyForm.resetForm();
+    } catch (error: any) {
+      console.error("Error creating join request:", error);
+      toast({
+        title: "Join request failed",
+        description: error.message ?? "Failed to send join request.",
+        variant: "destructive",
+      });
+    } finally {
+      setJoinRequestLoading(false);
+    }
+  };
+
   const openCreateProject = () => {
     if (!profile || !profile.company_id) {
       toast({
         title: "Company required",
-        description: "Please add your company details before creating a project.",
+        description: "Please join a company or create a company before creating a project.",
         variant: "destructive",
       });
+      setDialogMode("create");
       setShowCompanyDialog(true);
       return;
     }
@@ -198,29 +573,31 @@ const Dashboard = () => {
   };
 
   const handleCreateProject = async () => {
-    if (!projectName) {
+    if (!projectForm.validateForm()) {
       toast({
-        title: "Error",
-        description: "Please enter a project name",
+        title: "Please check your details",
+        description: "Fix the highlighted errors before creating project.",
         variant: "destructive",
       });
       return;
     }
 
-    if (!profile || !profile.company_id) {
+    if (!user || !profile?.company_id) {
       toast({
-        title: "Company required",
-        description: "Please add your company details before creating a project.",
+        title: "Error",
+        description: "No authenticated user or company found.",
         variant: "destructive",
       });
-      setShowCompanyDialog(true);
       return;
     }
 
     setLoading(true);
 
     try {
-      const { data: project, error } = await supabase
+      const projectName = projectForm.values.projectName;
+      const projectDescription = projectForm.values.projectDescription || "";
+
+      const { data: project, error: projectError } = await supabase
         .from("projects")
         .insert({
           name: projectName,
@@ -231,22 +608,21 @@ const Dashboard = () => {
         .select()
         .single();
 
-      if (error) throw error;
+      if (projectError || !project) {
+        throw projectError || new Error("Failed to create project");
+      }
 
-      // refresh list
       loadProjects(profile.company_id);
 
-      // close dialog and reset
       setShowProjectDialog(false);
-      setProjectName("");
-      setProjectDescription("");
+      projectForm.resetForm();
 
-      // go straight to dataset view for this project
+      // navigate to dataset manager for the newly created project
       navigate(`/dataset/${project.id}`);
     } catch (error: any) {
       console.error("Error creating project:", error);
       toast({
-        title: "Error",
+        title: "Project creation failed",
         description: error.message ?? "Failed to create project.",
         variant: "destructive",
       });
@@ -255,205 +631,190 @@ const Dashboard = () => {
     }
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    navigate("/auth");
-  };
+  // Calculate display name: profile name > user full_name > user email (never show "User" if session exists)
+  const displayName = profileLoading
+    ? "Loading..."
+    : profile?.name || user?.user_metadata?.full_name || user?.email || "";
 
-  const displayName =
-    user?.user_metadata?.name || user?.email?.split("@")[0] || "User";
+  const isAdmin = contextIsAdmin;
+  const hasCompany = !!profile?.company_id;
 
-  // ---------- RENDER ----------
+  // Show loading state while profile is being loaded
+  if (profileLoading) {
+    return <LoadingState message="Loading dashboard..." />;
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
-      {/* Top navbar */}
-      <nav className="border-b border-border bg-background/80 backdrop-blur-sm">
-        <div className="container mx-auto px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-primary">VisionM</h1>
-          <div className="flex gap-4 items-center">
-            {/* Join Company dialog button */}
-            <JoinCompanyDialog />
-            {/* Sign out */}
-            <Button variant="outline" onClick={handleSignOut}>
-              Sign Out
-            </Button>
-          </div>
-        </div>
-      </nav>
+    <div>
+      <PageHeader
+        title={`Welcome, ${displayName}`}
+        description="Manage your projects, datasets, and simulation workspace from this dashboard."
+      />
 
-      {/* Layout: sidebar + main */}
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="w-64 border-r border-border bg-background min-h-[calc(100vh-64px)]">
-          <div className="px-6 py-4 border-b border-border">
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              Menu
-            </p>
-          </div>
-
-          <div className="px-2 py-4 space-y-1">
-            {/* Projects group */}
-            <button
-              onClick={() => setProjectMenuOpen((prev) => !prev)}
-              className="w-full flex items-center justify-between px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted"
-            >
-              <span>Projects</span>
-              <span className="text-xs text-muted-foreground">
-                {projectMenuOpen ? "▾" : "▸"}
-              </span>
-            </button>
-
-            {projectMenuOpen && (
-              <div className="ml-4 mt-1 space-y-1">
-                <button
-                  onClick={openCreateProject}
-                  className="w-full text-left px-4 py-2 text-sm rounded-lg hover:bg-muted"
-                >
-                  Create Project
-                </button>
-                <button
-                  onClick={() => setActiveView("projects")}
-                  className={`w-full text-left px-4 py-2 text-sm rounded-lg hover:bg-muted ${
-                    activeView === "projects" ? "bg-muted" : ""
-                  }`}
-                >
-                  Manage Projects
-                </button>
-              </div>
-            )}
-
-            {/* Simulation item */}
-            <button
-              onClick={() => setActiveView("simulation")}
-              className={`w-full text-left px-4 py-2 text-sm rounded-lg hover:bg-muted ${
-                activeView === "simulation" ? "bg-muted" : ""
-              }`}
-            >
-              Simulation
-            </button>
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <main className="flex-1 container mx-auto px-8 py-8">
-          {/* Header */}
-          <div className="mb-8">
-            <h2 className="text-3xl font-bold mb-1">
-              Welcome, {displayName}
-            </h2>
-            {profile?.companies && (
-              <p className="text-muted-foreground">
-                {profile.companies.name}
-              </p>
-            )}
-          </div>
-
-          {/* Overview view (default) */}
-          {activeView === "overview" && (
-            <div className="flex items-center justify-center h-64">
-              <p className="text-muted-foreground text-sm">
-                Select an option from the sidebar to get started.
-              </p>
+      {/* Create Project Card */}
+      <div className="mb-8">
+        <Card 
+          className="border-dashed border-2 cursor-pointer hover:border-primary hover:bg-primary/5 transition-colors max-w-sm"
+          onClick={openCreateProject}
+        >
+          <CardContent className="py-8 flex flex-col items-center justify-center text-center">
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+              <Plus className="h-6 w-6 text-primary" />
             </div>
-          )}
-
-          {/* Manage Projects view */}
-          {activeView === "projects" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-2xl font-semibold">Manage Projects</h3>
-                <Button onClick={openCreateProject}>Create Project</Button>
-              </div>
-
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map((project) => (
-                  <Card
-                    key={project.id}
-                    className="hover:border-primary transition-colors cursor-pointer"
-                  >
-                    <CardHeader>
-                      <CardTitle>{project.name}</CardTitle>
-                      <CardDescription>
-                        {project.description || "No description"}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => navigate(`/dataset/${project.id}`)}
-                      >
-                        Manage Dataset
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-
-                {projects.length === 0 && (
-                  <Card className="border-dashed">
-                    <CardContent className="flex items-center justify-center py-12">
-                      <p className="text-muted-foreground text-sm">
-                        No projects yet. Use &quot;Create Project&quot; to add
-                        your first project.
-                      </p>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Simulation view (placeholder for now) */}
-          {activeView === "simulation" && (
-            <div className="space-y-4">
-              <h3 className="text-2xl font-semibold mb-2">Simulation</h3>
-              <Card>
-                <CardContent className="py-10">
-                  <p className="text-muted-foreground text-sm">
-                    Simulation module placeholder. Connect this view to your
-                    antenna / vision simulation pages when ready.
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-        </main>
+            <h3 className="font-semibold mb-1">Create New Project</h3>
+            <p className="text-xs text-muted-foreground">Start a new dataset project</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Company Details Dialog (for new user or when required) */}
-      <Dialog open={showCompanyDialog} onOpenChange={setShowCompanyDialog}>
+      {/* CONTENT: Overview placeholder (default) */}
+      {activeView === "overview" && projects.length === 0 && (
+        <EmptyState
+          icon={FolderKanban}
+          title="No projects yet"
+          description="Create your first project to get started organizing your datasets."
+          action={{
+            label: "Create Project",
+            onClick: openCreateProject,
+          }}
+        />
+      )}
+
+      {/* Manage Projects view (still available via sidebar "Manage Projects") */}
+      {activeView === "projects" && (
+        <div>
+          <h3 className="text-2xl font-semibold mb-2">Manage Projects</h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            Select a project to manage its dataset.
+          </p>
+
+          <ul className="space-y-2 max-w-xl">
+            {projects.length > 0 ? (
+              projects.map((p) => (
+                <li key={p.id}>
+                  <button
+                    onClick={() => navigate(`/dataset/${p.id}`)}
+                    className="w-full text-left px-4 py-3 rounded border hover:bg-muted flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-medium">{p.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {p.description || "No description"}
+                      </div>
+                    </div>
+                    <div className="text-sm text-primary">Open</div>
+                  </button>
+                </li>
+              ))
+            ) : (
+              <EmptyState
+                icon={FolderKanban}
+                title="No projects yet"
+                description="Use the left sidebar to create your first project."
+                action={{
+                  label: "Create Project",
+                  onClick: openCreateProject,
+                }}
+              />
+            )}
+          </ul>
+        </div>
+      )}
+
+      {/* Simulation view (placeholder) */}
+      {activeView === "simulation" && (
+        <div>
+          <h3 className="text-2xl font-semibold mb-2">Simulation</h3>
+          <Card>
+            <CardContent className="py-10">
+              <p className="text-muted-foreground text-sm">
+                Simulation module placeholder.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Members view */}
+      {activeView === "members" && profile?.company_id && (
+        <CompanyMembers
+          companyId={profile.company_id}
+          company={profile.companies}
+          isAdmin={isAdmin}
+        />
+      )}
+
+      {/* Company Details Dialog */}
+      <Dialog 
+        open={showCompanyDialog} 
+        onOpenChange={setShowCompanyDialog}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Company Details</DialogTitle>
+            <DialogTitle>
+              {dialogMode === "join" ? "Join Company" : "Company Details"}
+            </DialogTitle>
             <DialogDescription>
-              Please provide your company information to continue.
+              {dialogMode === "join" 
+                ? "Enter the company name and email to request access."
+                : "Please provide your company information to continue."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label htmlFor="company-name">Company Name</Label>
-              <Input
-                id="company-name"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                placeholder="Company Inc."
-              />
-            </div>
-            <div>
-              <Label htmlFor="company-email">Admin Email</Label>
-              <Input
-                id="company-email"
-                type="email"
-                value={companyEmail}
-                onChange={(e) => setCompanyEmail(e.target.value)}
-                placeholder="admin@company.com"
-              />
-            </div>
+            <FormFieldWrapper
+              label="Company Name"
+              name="companyName"
+              type="text"
+              value={companyForm.values.companyName}
+              onChange={companyForm.handleChange("companyName")}
+              onBlur={companyForm.handleBlur("companyName")}
+              error={companyForm.getFieldError("companyName")}
+              touched={companyForm.isFieldTouched("companyName")}
+              placeholder="Enter company name"
+              required
+            />
+            <FormFieldWrapper
+              label="Company Email"
+              name="businessEmail"
+              type="email"
+              value={companyForm.values.businessEmail}
+              onChange={companyForm.handleChange("businessEmail")}
+              onBlur={companyForm.handleBlur("businessEmail")}
+              error={companyForm.getFieldError("businessEmail")}
+              touched={companyForm.isFieldTouched("businessEmail")}
+              placeholder="company@example.com"
+              required
+            />
           </div>
-          <DialogFooter>
-            <Button onClick={handleSaveCompany} disabled={loading}>
-              {loading ? "Saving..." : "Save"}
+          <DialogFooter className="justify-end">
+            {dialogMode === "join" ? (
+              <Button onClick={handleJoinCompany} disabled={joinRequestLoading}>
+                {joinRequestLoading ? "Sending..." : "Join"}
+              </Button>
+            ) : (
+              <Button onClick={handleSaveCompany} disabled={loading}>
+                {loading ? "Saving..." : "Save"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Company Exists Confirmation Dialog */}
+      <Dialog open={showCompanyExistsDialog} onOpenChange={setShowCompanyExistsDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Company Already Exists</DialogTitle>
+            <DialogDescription>
+              This company already exists. Do you want to send a join request to the admin?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="justify-end">
+            <Button
+              onClick={handleCreateJoinRequest}
+              disabled={joinRequestLoading}
+            >
+              {joinRequestLoading ? "Sending..." : "Yes, Send Request"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -465,39 +826,46 @@ const Dashboard = () => {
           <DialogHeader>
             <DialogTitle>Create New Project</DialogTitle>
             <DialogDescription>
-              Enter details for your new dataset project.
+              Create a new project to organize your datasets and training jobs.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label htmlFor="project-name">Project Name</Label>
-              <Input
-                id="project-name"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder="My Dataset Project"
-              />
-            </div>
+            <FormFieldWrapper
+              label="Project Name"
+              name="projectName"
+              type="text"
+              value={projectForm.values.projectName}
+              onChange={projectForm.handleChange("projectName")}
+              onBlur={projectForm.handleBlur("projectName")}
+              error={projectForm.getFieldError("projectName")}
+              touched={projectForm.isFieldTouched("projectName")}
+              placeholder="Enter project name"
+              required
+            />
             <div>
               <Label htmlFor="project-description">Description (Optional)</Label>
               <Textarea
                 id="project-description"
-                value={projectDescription}
-                onChange={(e) => setProjectDescription(e.target.value)}
-                placeholder="Describe your project..."
+                value={projectForm.values.projectDescription || ""}
+                onChange={(e) => projectForm.setValue("projectDescription", e.target.value)}
+                placeholder="Enter project description"
+                className={
+                  projectForm.isFieldTouched("projectDescription") &&
+                  projectForm.getFieldError("projectDescription")
+                    ? "border-destructive"
+                    : ""
+                }
               />
+              {projectForm.isFieldTouched("projectDescription") &&
+                projectForm.getFieldError("projectDescription") && (
+                  <p className="mt-1 text-xs text-destructive" role="alert">
+                    {projectForm.getFieldError("projectDescription")}
+                  </p>
+                )}
             </div>
           </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowProjectDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleCreateProject} disabled={loading}>
-              {loading ? "Creating..." : "Create Project"}
-            </Button>
+          <DialogFooter className="justify-end">
+            <Button onClick={handleCreateProject} disabled={loading}>{loading ? "Creating..." : "Create Project"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

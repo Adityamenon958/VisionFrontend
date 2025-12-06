@@ -6,15 +6,47 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FormFieldWrapper } from "@/components/FormFieldWrapper";
+import { PasswordChecklist } from "@/components/PasswordChecklist";
+import { useFormValidation } from "@/hooks/useFormValidation";
+import { resetPasswordFormSchema } from "@/lib/validations/authSchemas";
 
 const ResetPassword = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [passwordStrengthError, setPasswordStrengthError] = useState(false);
+
+  const resetPasswordForm = useFormValidation({
+    schema: resetPasswordFormSchema,
+    initialValues: {
+      password: "",
+      confirmPassword: "",
+    },
+    validateOnChange: false,
+    validateOnBlur: true,
+  });
+
+  // Check if all password requirements are met
+  const isPasswordValid = () => {
+    const pwd = resetPasswordForm.values.password;
+    return (
+      pwd.length >= 8 &&
+      /[a-z]/.test(pwd) &&
+      /[A-Z]/.test(pwd) &&
+      /[0-9]/.test(pwd) &&
+      /[^A-Za-z0-9]/.test(pwd)
+    );
+  };
+
+  useEffect(() => {
+    // Reset password strength error when all requirements are met
+    if (isPasswordValid()) {
+      setPasswordStrengthError(false);
+    }
+  }, [resetPasswordForm.values.password]);
 
   useEffect(() => {
     checkSession();
@@ -40,18 +72,20 @@ const ResetPassword = () => {
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!password || !confirmPassword) {
-      toast({
-        title: "Missing fields",
-        description: "Please fill in both fields.",
-        variant: "destructive",
-      });
-      return;
-    }
+    // Mark all fields as touched to show errors
+    resetPasswordForm.validateForm();
 
-    if (password !== confirmPassword) {
+    // Check if all password requirements are met
+    const passwordIsValid = isPasswordValid();
+    setPasswordStrengthError(!passwordIsValid && resetPasswordForm.values.password.length > 0);
+
+    // Check if form is valid (including password requirements)
+    const hasFormErrors = !resetPasswordForm.isValid || !passwordIsValid;
+
+    if (hasFormErrors) {
       toast({
-        title: "Passwords do not match",
+        title: "Please check your details",
+        description: "Fix the highlighted errors before updating password.",
         variant: "destructive",
       });
       return;
@@ -60,7 +94,7 @@ const ResetPassword = () => {
     setLoading(true);
 
     const { error } = await supabase.auth.updateUser({
-      password: password,
+      password: resetPasswordForm.values.password,
     });
 
     if (error) {
@@ -96,22 +130,35 @@ const ResetPassword = () => {
               <Input
                 id="password"
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
+                value={resetPasswordForm.values.password}
+                onChange={resetPasswordForm.handleChange("password")}
+                onBlur={resetPasswordForm.handleBlur("password")}
+                className={(resetPasswordForm.isFieldTouched("password") && resetPasswordForm.getFieldError("password")) || passwordStrengthError ? "border-destructive" : ""}
               />
+              {resetPasswordForm.isFieldTouched("password") && resetPasswordForm.getFieldError("password") && (
+                <p className="mt-1 text-xs text-destructive">
+                  {resetPasswordForm.getFieldError("password")}
+                </p>
+              )}
+              {passwordStrengthError && (
+                <p className="mt-1 text-xs text-destructive">
+                  Password must meet all requirements to update.
+                </p>
+              )}
+              <PasswordChecklist password={resetPasswordForm.values.password} />
             </div>
 
-            <div>
-              <Label htmlFor="confirm">Confirm Password</Label>
-              <Input
-                id="confirm"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-              />
-            </div>
+            <FormFieldWrapper
+              label="Confirm Password"
+              name="confirmPassword"
+              type="password"
+              value={resetPasswordForm.values.confirmPassword}
+              onChange={resetPasswordForm.handleChange("confirmPassword")}
+              onBlur={resetPasswordForm.handleBlur("confirmPassword")}
+              error={resetPasswordForm.getFieldError("confirmPassword")}
+              touched={resetPasswordForm.isFieldTouched("confirmPassword")}
+              required
+            />
 
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Updating..." : "Update Password"}

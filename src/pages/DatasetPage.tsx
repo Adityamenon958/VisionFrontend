@@ -8,9 +8,9 @@ import DatasetManager from "./DatasetManager";
  * Route: /dataset/:id
  */
 /**const DatasetPage = () => {
-  const { id } = useParams<{ id?: string }>();
-  const navigate = useNavigate();
-  const { toast } = useToast();
+const { id } = useParams<{ id?: string }>();
+const navigate = useNavigate();
+const { toast } = useToast();
 
   // If there is no :id in the URL, show error + redirect
   useEffect(() => {

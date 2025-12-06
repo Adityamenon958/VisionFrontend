@@ -1,0 +1,70 @@
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { formatDistanceToNow } from "date-fns";
+
+interface RequestItemProps {
+  request: {
+    id: string;
+    company_name: string;
+    created_at: string;
+    profiles?: {
+      name: string;
+      email: string;
+    } | null;
+  };
+  onApprove: (requestId: string) => void;
+  onReject: (requestId: string) => void;
+  loading?: boolean;
+}
+
+export const RequestItem: React.FC<RequestItemProps> = ({
+  request,
+  onApprove,
+  onReject,
+  loading = false,
+}) => {
+  const requesterName = request.profiles?.name || "Unknown User";
+  const requesterEmail = request.profiles?.email || "No email";
+  const timeAgo = formatDistanceToNow(new Date(request.created_at), { addSuffix: true });
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="space-y-3">
+          <div>
+            <h4 className="font-semibold text-sm">{requesterName}</h4>
+            <p className="text-xs text-muted-foreground">{requesterEmail}</p>
+          </div>
+          
+          <div>
+            <p className="text-xs text-muted-foreground">
+              Requested: <span className="font-medium">{request.company_name}</span>
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">{timeAgo}</p>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <Button
+              size="sm"
+              onClick={() => onApprove(request.id)}
+              disabled={loading}
+              className="flex-1"
+            >
+              Accept
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onReject(request.id)}
+              disabled={loading}
+              className="flex-1"
+            >
+              Ignore
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+

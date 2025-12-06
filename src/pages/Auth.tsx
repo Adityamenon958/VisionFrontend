@@ -19,175 +19,333 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { z } from "zod";
-
-// ---------------- PHONE RULES (length + label) ----------------
-
-const phoneRules: Record<string, { length: number; label: string }> = {
-  "+1": { length: 10, label: "US" },
-  "+44": { length: 10, label: "UK" },
-  "+91": { length: 10, label: "India" },
-  "+61": { length: 9, label: "Australia" },
-  "+49": { length: 10, label: "Germany" },
-  "+33": { length: 9, label: "France" },
-};
-
-// ---------------- SIGNUP VALIDATION SCHEMA ----------------
-
-const signupSchema = z.object({
-  name: z
-    .string()
-    .min(3, "Name must be at least 3 characters")
-    .max(40, "Name must be at most 40 characters")
-    .regex(/^[A-Za-z\s]+$/, "Name must contain only letters and spaces"),
-  phone: z.string().min(10, "Phone number is too short"),
-  email: z
-    .string()
-    .email("Invalid email address")
-    .refine((email) => {
-      const domain = email.split("@")[1]?.toLowerCase();
-      if (!domain) return false;
-
-      // Allow Gmail + company domains, block some common free ones
-      if (domain === "gmail.com") return true;
-      const blockedFreeDomains = ["yahoo.com", "hotmail.com", "outlook.com"];
-      return !blockedFreeDomains.includes(domain);
-    }, "Please use Gmail or a company email address"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
-});
-
-type SignupErrors = {
-  name?: string;
-  email?: string;
-  phone?: string;
-  password?: string;
-};
+import { FormFieldWrapper } from "@/components/FormFieldWrapper";
+import { PasswordChecklist } from "@/components/PasswordChecklist";
+import { useFormValidation } from "@/hooks/useFormValidation";
+import {
+  signupSchema,
+  signinSchema,
+  resetPasswordSchema,
+  validatePhoneNumber,
+  phoneRules,
+  type SignupFormData,
+  type SigninFormData,
+  type ResetPasswordFormData,
+} from "@/lib/validations/authSchemas";
 
 const Auth = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"signin" | "signup" | "forgot">(
-    (searchParams.get("mode") as "signin" | "signup" | "forgot") || "signin",
-  );
+  
+  // Get invite token from URL if present
+  const inviteToken = searchParams.get("invite") ?? searchParams.get("project_invite");
+  
+  // Force signin mode when invite token is present
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">(() => {
+    if (inviteToken) return "signin"; // Force signin mode for invites
+    return (searchParams.get("mode") as "signin" | "signup" | "forgot") || "signin";
+  });
 
-  // ---------------- SIGNUP STATE ----------------
-  const [name, setName] = useState("");
-  const [countryCode, setCountryCode] = useState("+91"); // default India
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-
-  const [signupErrors, setSignupErrors] = useState<SignupErrors>({});
-  const [signupTouched, setSignupTouched] = useState<SignupErrors>({});
-
-  // ---------------- SIGNIN STATE ----------------
-  const [signinEmail, setSigninEmail] = useState("");
-  const [signinPassword, setSigninPassword] = useState("");
-
-  // ---------------- FORGOT PASSWORD STATE ----------------
-  const [resetEmail, setResetEmail] = useState("");
-
-  // ---------------- PASSWORD STRENGTH ----------------
-  const [passwordStrength, setPasswordStrength] = useState(0);
-
-  useEffect(() => {
-    calculatePasswordStrength(password);
-  }, [password]);
-
-  const calculatePasswordStrength = (pwd: string) => {
-    let strength = 0;
-    if (pwd.length >= 8) strength += 25;
-    if (pwd.length >= 12) strength += 25;
-    if (/[A-Z]/.test(pwd) && /[a-z]/.test(pwd)) strength += 25;
-    if (/\d/.test(pwd)) strength += 15;
-    if (/[^A-Za-z0-9]/.test(pwd)) strength += 10;
-    setPasswordStrength(Math.min(strength, 100));
+  // Helper function to normalize URLs (remove trailing slashes)
+  const normalizeUrl = (url: string): string => {
+    return url.replace(/\/+$/, '');
   };
 
-  const getPasswordColor = () => {
-    if (passwordStrength < 30) return "bg-destructive";
-    if (passwordStrength < 60) return "bg-warning";
-    return "bg-success";
-  };
-
-  // ---------------- LIVE SIGNUP VALIDATION ----------------
+  // Force signin mode when invite token is present (prevent mode switching)
   useEffect(() => {
-    const fullPhone = countryCode + phone;
+    if (inviteToken && mode !== "signin") {
+      setMode("signin");
+    }
+  }, [inviteToken, mode]);
 
-    const result = signupSchema.safeParse({
-      name,
-      phone: fullPhone,
-      email,
-      password,
+  // Listen for auth state changes to handle invite acceptance after magic link sign-in
+  useEffect(() => {
+    if (!inviteToken) return;
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // When user signs in via magic link, accept the invite
+      if (event === "SIGNED_IN" && session?.user) {
+        // Small delay to ensure session is fully established
+        setTimeout(() => {
+          handleInviteAcceptanceAfterSignIn();
+        }, 500);
+      }
     });
 
-    const fieldErrors: SignupErrors = {};
+    return () => {
+      subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteToken]);
 
-    if (!result.success) {
-      for (const issue of result.error.issues) {
-        const field = issue.path[0] as keyof SignupErrors;
-        fieldErrors[field] = issue.message;
+  // Auto-trigger signInWithOtp if invite token present and no session
+  useEffect(() => {
+    if (!inviteToken) return;
+
+    const checkSessionAndTriggerOtp = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      // If no session and invite token exists, validate invite and trigger OTP
+      if (!session) {
+        try {
+          // Validate invite to get email
+          const validateRes = await fetch(
+            `/functions/v1/validate-invite?token=${encodeURIComponent(inviteToken)}`
+          );
+          const validateJson = await validateRes.json();
+
+          if (validateRes.ok && validateJson?.ok && validateJson.invite?.email) {
+            const inviteEmail = validateJson.invite.email;
+            // Prefill email in signin form
+            signinForm.setValue("email", inviteEmail);
+            // Trigger signInWithOtp automatically
+            const { error: otpError } = await supabase.auth.signInWithOtp({
+              email: inviteEmail,
+              options: {
+                emailRedirectTo: `${normalizeUrl(window.location.origin)}/auth?invite=${encodeURIComponent(inviteToken)}`,
+              },
+            });
+
+            if (otpError) {
+              console.error("Auto OTP trigger error:", otpError);
+              // Don't show error - user can still sign in manually
+            } else {
+              toast({
+                title: "Magic link sent",
+                description: `A sign-in link has been sent to ${inviteEmail}. Check your email and click the link to sign in and accept the invite.`,
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Error validating invite for auto OTP:", error);
+          // Don't block user - they can still sign in manually
+        }
+      } else {
+        // Session exists - check if we need to accept invite
+        // This handles the case where user clicked magic link and is already signed in
+        handleInviteAcceptanceAfterSignIn();
       }
-    }
+    };
 
-    // extra phone length validation per country
-    const digits = phone.replace(/\D/g, "");
-    const rule = phoneRules[countryCode];
+    checkSessionAndTriggerOtp();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteToken]);
 
-    if (rule) {
-      if (digits.length !== rule.length) {
-        fieldErrors.phone = `Phone number must be ${rule.length} digits for ${rule.label}`;
+  // Handle invite acceptance after sign-in (for magic link flow)
+  const handleInviteAcceptanceAfterSignIn = async () => {
+    if (!inviteToken) return;
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) return;
+
+      // Validate invite
+      const validateRes = await fetch(
+        `/functions/v1/validate-invite?token=${encodeURIComponent(inviteToken)}`
+      );
+      const validateJson = await validateRes.json();
+
+      if (!validateRes.ok || !validateJson?.ok) {
+        return;
       }
+
+      const invite = validateJson.invite;
+      if (!invite || invite.status !== "pending") {
+        return;
+      }
+
+      // Check if user's email matches invite email
+      if (session.user.email !== invite.email) {
+        toast({
+          title: "Invite email mismatch",
+          description: "This invite is for a different email address.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Accept the invite
+      const acceptRes = await fetch("/functions/v1/accept-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: inviteToken, userId: session.user.id }),
+      });
+
+      const acceptJson = await acceptRes.json();
+      if (acceptRes.ok && acceptJson?.ok) {
+        toast({
+          title: "Invite accepted",
+          description: "You have been added to the company. Redirecting to dashboard...",
+        });
+        // Clear invite token from URL
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("invite");
+        newParams.delete("project_invite");
+        setSearchParams(newParams);
+        // Wait a moment for profile to update, then redirect to dashboard
+        setTimeout(() => {
+          navigate("/dashboard");
+        }, 1500);
+      } else {
+        console.error("Invite acceptance failed:", acceptJson?.error);
+        toast({
+          title: "Failed to accept invite",
+          description: acceptJson?.error || "Please try again.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error accepting invite after sign-in:", error);
     }
+  };
 
-    setSignupErrors(fieldErrors);
-  }, [name, email, phone, password, countryCode]);
+  // Reset forms and phone error when switching modes
+  useEffect(() => {
+    if (mode !== "signup") {
+      setPhoneError(null);
+      setPasswordStrengthError(false);
+      signupForm.resetForm();
+    }
+    if (mode !== "signin") {
+      signinForm.resetForm();
+    }
+    if (mode !== "forgot") {
+      resetPasswordForm.resetForm();
+    }
+  }, [mode]);
 
-  const isSignupValid =
-    name &&
-    email &&
-    phone &&
-    password &&
-    Object.keys(signupErrors).length === 0;
+  // ---------------- SIGNUP STATE ----------------
+  const [countryCode, setCountryCode] = useState("+91"); // default India
+
+  const signupForm = useFormValidation({
+    schema: signupSchema,
+    initialValues: {
+      name: "",
+      email: "",
+      phone: "",
+      countryCode: "+91",
+      password: "",
+    },
+    validateOnChange: true,
+    validateOnBlur: true,
+  });
+
+  // ---------------- SIGNIN STATE ----------------
+  const signinForm = useFormValidation({
+    schema: signinSchema,
+    initialValues: {
+      email: "",
+      password: "",
+    },
+    validateOnChange: false,
+    validateOnBlur: true,
+  });
+
+  // ---------------- FORGOT PASSWORD STATE ----------------
+  const resetPasswordForm = useFormValidation({
+    schema: resetPasswordSchema,
+    initialValues: {
+      email: "",
+    },
+    validateOnChange: false,
+    validateOnBlur: true,
+  });
+
+  // ---------------- PASSWORD VALIDATION ----------------
+  // Check if all password requirements are met
+  const isPasswordValid = () => {
+    const pwd = signupForm.values.password;
+    return (
+      pwd.length >= 8 &&
+      /[a-z]/.test(pwd) &&
+      /[A-Z]/.test(pwd) &&
+      /[0-9]/.test(pwd) &&
+      /[^A-Za-z0-9]/.test(pwd)
+    );
+  };
+
+  useEffect(() => {
+    // Reset password strength error when all requirements are met
+    if (isPasswordValid()) {
+      setPasswordStrengthError(false);
+    }
+  }, [signupForm.values.password]);
+
+  // ---------------- PHONE VALIDATION WITH COUNTRY CODE ----------------
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [passwordStrengthError, setPasswordStrengthError] = useState(false);
+
+  useEffect(() => {
+    if (signupForm.values.phone && countryCode) {
+      const error = validatePhoneNumber(signupForm.values.phone, countryCode);
+      setPhoneError(error);
+    } else {
+      setPhoneError(null);
+    }
+  }, [signupForm.values.phone, countryCode]);
+
+  // Update countryCode in form when it changes
+  useEffect(() => {
+    signupForm.setValue("countryCode", countryCode);
+  }, [countryCode]);
 
   // ---------------- HANDLERS ----------------
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    setSignupTouched({
-      name: true,
-      email: true,
-      phone: true,
-      password: true,
-    });
+    // Mark all fields as touched to show errors
+    signupForm.validateForm();
 
-    if (!isSignupValid) {
+    // Validate phone with country code
+    const currentPhoneError = validatePhoneNumber(signupForm.values.phone, countryCode);
+    setPhoneError(currentPhoneError);
+
+    // Check if all password requirements are met
+    const passwordIsValid = isPasswordValid();
+    setPasswordStrengthError(!passwordIsValid && signupForm.values.password.length > 0);
+
+    // Check if form is valid (including phone and password requirements)
+    const hasFormErrors = !signupForm.isValid || !!currentPhoneError || !passwordIsValid;
+    const hasAllFields = 
+      signupForm.values.name &&
+      signupForm.values.email &&
+      signupForm.values.phone &&
+      signupForm.values.password;
+
+    if (hasFormErrors || !hasAllFields) {
       toast({
-      title: "Please check your details",
-      description: "Fix the highlighted errors before signing up.",
-      variant: "destructive",
-    });
+        title: "Please check your details",
+        description: "Fix the highlighted errors before signing up.",
+        variant: "destructive",
+      });
       return;
     }
 
     setLoading(true);
 
     try {
-      const fullPhone = countryCode + phone;
+      const fullPhone = countryCode + signupForm.values.phone;
 
       const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
+        email: signupForm.values.email,
+        password: signupForm.values.password,
         options: {
           data: {
-            name,
+            name: signupForm.values.name,
             phone: fullPhone,
           },
-          emailRedirectTo: `${window.location.origin}/verify-email`,
+          emailRedirectTo: `${normalizeUrl(window.location.origin)}/verify-email`,
         },
       });
 
@@ -198,18 +356,37 @@ const Auth = () => {
       }
 
       if (
-      data?.user &&
-      Array.isArray((data.user as any).identities) &&
-      (data.user as any).identities.length === 0
-    ) {
-      toast({
-        title: "Account already exists",
-        description:
-          "An account with this email already exists. Please sign in instead.",
-        variant: "destructive",
-      });
-      return;
-    }
+        data?.user &&
+        Array.isArray((data.user as any).identities) &&
+        (data.user as any).identities.length === 0
+      ) {
+        toast({
+          title: "Account already exists",
+          description:
+            "An account with this email already exists. Please sign in instead.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Create or update profile with name and phone
+      if (data?.user?.id) {
+        const { error: profileError } = await supabase
+          .from("profiles")
+          .upsert({
+            id: data.user.id,
+            name: signupForm.values.name,
+            phone: fullPhone,
+            email: signupForm.values.email,
+          }, {
+            onConflict: "id",
+          });
+
+        if (profileError) {
+          console.error("Error creating profile:", profileError);
+          // Don't fail the signup if profile creation fails - trigger might handle it
+        }
+      }
 
       toast({
         title: "verification email sent",
@@ -218,10 +395,10 @@ const Auth = () => {
       });
     } catch (error: any) {
       let message = error.message;
-      
+
       if (message?.includes("User already")) {
         message = "An account with this email already exists. Please sign in instead.";
-  }
+      }
       toast({
         title: "signup failed",
         description: error.message || "Something went wrong",
@@ -234,22 +411,73 @@ const Auth = () => {
 
   const handleSignin = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Skip form validation if invite token is present (user should use magic link)
+    if (!inviteToken && !signinForm.validateForm()) {
+      toast({
+        title: "Please check your details",
+        description: "Fix the highlighted errors before signing in.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // If invite token is present, prevent password sign-in
+    if (inviteToken) {
+      toast({
+        title: "Use magic link to sign in",
+        description: "Please check your email and click the magic link to sign in and accept the invite.",
+        variant: "default",
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: signinEmail,
-        password: signinPassword,
+        email: signinForm.values.email,
+        password: signinForm.values.password,
       });
 
       console.log("signIn response:", { data, error });
 
       if (error) {
+        // Handle specific error for invited users (account exists but no password)
+        if (inviteToken && (error.message?.includes("Invalid login credentials") || 
+            error.message?.includes("Email not confirmed") ||
+            error.message?.includes("invalid_credentials"))) {
+          throw new Error("This account was created via invite. Please use the magic link sent to your email to sign in. Check your email inbox for the sign-in link.");
+        }
         throw error;
       }
 
       if (!data?.user) {
         throw new Error("Login failed. Please check your credentials.");
+      }
+
+      // Handle invite acceptance if token is present
+      if (inviteToken && data.user) {
+        try {
+          const acceptRes = await fetch("/functions/v1/accept-invite", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: inviteToken, userId: data.user.id }),
+          });
+          const acceptJson = await acceptRes.json();
+          if (acceptRes.ok && acceptJson?.ok) {
+            toast({
+              title: "Invite accepted",
+              description: "You have been added to the company.",
+            });
+          } else {
+            // Don't block navigation if invite acceptance fails
+            console.error("Invite acceptance failed:", acceptJson?.error);
+          }
+        } catch (err) {
+          // Don't block navigation if invite acceptance fails
+          console.error("Error accepting invite:", err);
+        }
       }
 
       navigate("/dashboard");
@@ -268,11 +496,21 @@ const Auth = () => {
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!resetPasswordForm.validateForm()) {
+      toast({
+        title: "Please check your details",
+        description: "Fix the highlighted errors before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      const { error } = await supabase.auth.resetPasswordForEmail(resetPasswordForm.values.email, {
+        redirectTo: `${normalizeUrl(window.location.origin)}/reset-password`,
       });
 
       if (error) throw error;
@@ -321,46 +559,33 @@ const Auth = () => {
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* SIGN UP */}
-          {mode === "signup" && (
+          {/* SIGN UP - Hidden when invite token is present */}
+          {mode === "signup" && !inviteToken && (
             <form onSubmit={handleSignup} className="space-y-4">
-              <div>
-                <Label htmlFor="name">Full Name</Label>
-                <Input
-                  id="name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onBlur={() =>
-                    setSignupTouched((prev) => ({ ...prev, name: true }))
-                  }
-                  placeholder="Your full name"
-                />
-                {signupTouched.name && signupErrors.name && (
-                  <p className="mt-1 text-xs text-destructive">
-                    {signupErrors.name}
-                  </p>
-                )}
-              </div>
+              <FormFieldWrapper
+                label="Full Name"
+                name="name"
+                value={signupForm.values.name}
+                onChange={signupForm.handleChange("name")}
+                onBlur={signupForm.handleBlur("name")}
+                error={signupForm.getFieldError("name")}
+                touched={signupForm.isFieldTouched("name")}
+                placeholder="Your full name"
+                required
+              />
 
-              <div>
-                <Label htmlFor="email">Business Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onBlur={() =>
-                    setSignupTouched((prev) => ({ ...prev, email: true }))
-                  }
-                  placeholder="you@company.com"
-                />
-                {signupTouched.email && signupErrors.email && (
-                  <p className="mt-1 text-xs text-destructive">
-                    {signupErrors.email}
-                  </p>
-                )}
-              </div>
+              <FormFieldWrapper
+                label="Business Email"
+                name="email"
+                type="email"
+                value={signupForm.values.email}
+                onChange={signupForm.handleChange("email")}
+                onBlur={signupForm.handleBlur("email")}
+                error={signupForm.getFieldError("email")}
+                touched={signupForm.isFieldTouched("email")}
+                placeholder="you@company.com"
+                required
+              />
 
               <div>
                 <Label htmlFor="phone">Phone Number</Label>
@@ -384,17 +609,16 @@ const Auth = () => {
                   <Input
                     id="phone"
                     type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    onBlur={() =>
-                      setSignupTouched((prev) => ({ ...prev, phone: true }))
-                    }
+                    value={signupForm.values.phone}
+                    onChange={signupForm.handleChange("phone")}
+                    onBlur={signupForm.handleBlur("phone")}
                     placeholder=""
+                    className={signupForm.isFieldTouched("phone") && (signupForm.getFieldError("phone") || phoneError) ? "border-destructive" : ""}
                   />
                 </div>
-                {signupTouched.phone && signupErrors.phone && (
+                {signupForm.isFieldTouched("phone") && (signupForm.getFieldError("phone") || phoneError) && (
                   <p className="mt-1 text-xs text-destructive">
-                    {signupErrors.phone}
+                    {signupForm.getFieldError("phone") || phoneError}
                   </p>
                 )}
               </div>
@@ -404,43 +628,28 @@ const Auth = () => {
                 <Input
                   id="password"
                   type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onBlur={() =>
-                    setSignupTouched((prev) => ({ ...prev, password: true }))
-                  }
+                  value={signupForm.values.password}
+                  onChange={signupForm.handleChange("password")}
+                  onBlur={signupForm.handleBlur("password")}
+                  className={(signupForm.isFieldTouched("password") && signupForm.getFieldError("password")) || passwordStrengthError ? "border-destructive" : ""}
                 />
-                {signupTouched.password && signupErrors.password && (
+                {signupForm.isFieldTouched("password") && signupForm.getFieldError("password") && (
                   <p className="mt-1 text-xs text-destructive">
-                    {signupErrors.password}
+                    {signupForm.getFieldError("password")}
                   </p>
                 )}
-                <div className="mt-2 space-y-1">
-                  <div className="flex gap-1 h-2 rounded-full overflow-hidden bg-muted">
-                    <div
-                      className={getPasswordColor()}
-                      style={{ width: `${passwordStrength}%` }}
-                    />
-                    <div
-                      className="bg-muted"
-                      style={{ width: `${100 - passwordStrength}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Password strength:{" "}
-                    {passwordStrength < 30
-                      ? "Weak"
-                      : passwordStrength < 60
-                      ? "Medium"
-                      : "Strong"}
+                {passwordStrengthError && (
+                  <p className="mt-1 text-xs text-destructive">
+                    Password must meet all requirements to sign up.
                   </p>
-                </div>
+                )}
+                <PasswordChecklist password={signupForm.values.password} />
               </div>
 
               <Button
                 type="submit"
                 className="w-full"
-                disabled={loading || !isSignupValid}
+                disabled={loading}
               >
                 {loading ? "Signing up..." : "Sign Up"}
               </Button>
@@ -461,68 +670,95 @@ const Auth = () => {
           {/* SIGN IN */}
           {mode === "signin" && (
             <form onSubmit={handleSignin} className="space-y-5">
-              <div>
-                <Label>Business Email</Label>
-                <Input
-                  type="email"
-                  placeholder="you@company.com"
-                  value={signinEmail}
-                  onChange={(e) => setSigninEmail(e.target.value)}
-                  required
-                />
-              </div>
+              {/* Show invite message when invite token is present */}
+              {inviteToken && (
+                <div className="p-4 bg-primary/10 border border-primary/20 rounded-md">
+                  <p className="text-sm font-medium text-primary mb-1">
+                    You&apos;ve been invited to join a company
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    A magic link has been sent to your email. Click the link in your email to sign in and accept the invite. 
+                    {signinForm.values.email && (
+                      <> If you haven&apos;t received it, check your inbox for <strong>{signinForm.values.email}</strong>.</>
+                    )}
+                  </p>
+                </div>
+              )}
 
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  placeholder="Enter your password"
-                  value={signinPassword}
-                  onChange={(e) => setSigninPassword(e.target.value)}
-                  required
-                />
-              </div>
+              <FormFieldWrapper
+                label="Business Email"
+                name="email"
+                type="email"
+                value={signinForm.values.email}
+                onChange={signinForm.handleChange("email")}
+                onBlur={signinForm.handleBlur("email")}
+                error={signinForm.getFieldError("email")}
+                touched={signinForm.isFieldTouched("email")}
+                placeholder="you@company.com"
+                required
+                disabled={!!inviteToken} // Disable email input when invite token is present
+              />
 
-              <div className="text-right">
-                <button
-                  type="button"
-                  onClick={() => setMode("forgot")}
-                  className="text-sm text-primary hover:underline"
-                >
-                  Forgot password?
-                </button>
-              </div>
+              <FormFieldWrapper
+                label="Password"
+                name="password"
+                type="password"
+                value={signinForm.values.password}
+                onChange={signinForm.handleChange("password")}
+                onBlur={signinForm.handleBlur("password")}
+                error={inviteToken ? undefined : signinForm.getFieldError("password")} // Hide error when invite token is present
+                touched={inviteToken ? false : signinForm.isFieldTouched("password")} // Don't show as touched when invite token is present
+                placeholder={inviteToken ? "Use magic link from email instead" : "Enter your password"}
+                required={!inviteToken} // Not required when invite token is present
+                disabled={!!inviteToken} // Disable password input when invite token is present
+              />
 
-              <Button className="w-full" type="submit" disabled={loading}>
-                {loading ? "Signing in..." : "Sign In"}
+              {!inviteToken && (
+                <div className="text-right">
+                  <button
+                    type="button"
+                    onClick={() => setMode("forgot")}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+
+              <Button className="w-full" type="submit" disabled={loading || !!inviteToken}>
+                {loading ? "Signing in..." : inviteToken ? "Use magic link from email" : "Sign In"}
               </Button>
 
-              <p className="text-sm text-center text-muted-foreground">
-                Don&apos;t have an account?{" "}
-                <button
-                  type="button"
-                  onClick={() => setMode("signup")}
-                  className="text-primary hover:underline"
-                >
-                  Sign up
-                </button>
-              </p>
+              {!inviteToken && (
+                <p className="text-sm text-center text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <button
+                    type="button"
+                    onClick={() => setMode("signup")}
+                    className="text-primary hover:underline"
+                  >
+                    Sign up
+                  </button>
+                </p>
+              )}
             </form>
           )}
 
-          {/* FORGOT PASSWORD */}
-          {mode === "forgot" && (
+          {/* FORGOT PASSWORD - Hidden when invite token is present */}
+          {mode === "forgot" && !inviteToken && (
             <form onSubmit={handleForgotPassword} className="space-y-5">
-              <div>
-                <Label>Business Email</Label>
-                <Input
-                  type="email"
-                  placeholder="you@company.com"
-                  value={resetEmail}
-                  onChange={(e) => setResetEmail(e.target.value)}
-                  required
-                />
-              </div>
+              <FormFieldWrapper
+                label="Business Email"
+                name="email"
+                type="email"
+                value={resetPasswordForm.values.email}
+                onChange={resetPasswordForm.handleChange("email")}
+                onBlur={resetPasswordForm.handleBlur("email")}
+                error={resetPasswordForm.getFieldError("email")}
+                touched={resetPasswordForm.isFieldTouched("email")}
+                placeholder="you@company.com"
+                required
+              />
 
               <Button className="w-full" type="submit" disabled={loading}>
                 {loading ? "Sending..." : "Send Reset Link"}
