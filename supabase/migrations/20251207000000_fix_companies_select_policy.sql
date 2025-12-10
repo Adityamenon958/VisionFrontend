@@ -26,3 +26,4 @@ CREATE POLICY "Users can view their company"
 
 
 
+

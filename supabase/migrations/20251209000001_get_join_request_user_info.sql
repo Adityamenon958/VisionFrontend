@@ -34,3 +34,4 @@ COMMENT ON FUNCTION public.get_join_request_user_info(UUID) IS
   'Allows admins to view user name and email for pending join requests. Bypasses RLS to enable viewing user info even when user is not yet a company member.';
 
 
+

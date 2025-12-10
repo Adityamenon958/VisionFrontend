@@ -1101,60 +1101,7 @@ const DatasetManager = () => {
           metaJson = await metaRes.json();
           setMetadata(metaJson);
           
-          console.log('🔍 [DEBUG] Metadata response:', {
-            hasFiles: !!metaJson.files,
-            filesIsArray: Array.isArray(metaJson.files),
-            filesCount: metaJson.files?.length || 0,
-            firstFileId: metaJson.files?.[0]?.id,
-            firstFileThumbnailAvailable: metaJson.files?.[0]?.thumbnailAvailable,
-            dataSource: 'GET /api/dataset/:datasetId (metadata endpoint)'
-          });
-          
-          // Build tree from metadata.files if available (faster than fetching all)
-          // ⚠️ WARNING: This endpoint may not have file.id or thumbnailAvailable properly set
-          if (metaJson.files && Array.isArray(metaJson.files)) {
-            console.warn('⚠️ [DEBUG] Using metadata.files to build tree - this may not have file IDs!');
-            
-            const filesList: FileEntry[] = metaJson.files.map((file: any) => ({
-              id: file.id || file._id,
-              storedName: file.storedName,
-              originalName: file.originalName || file.name || "",
-              type: file.type,
-              size: file.size,
-              folder: file.folder,
-              storedPath: file.storedPath || file.path || "",
-              // Use actual thumbnailAvailable from backend (don't default to true)
-              thumbnailAvailable: file.thumbnailAvailable,
-              url: file.url,
-              name: file.originalName || file.name,
-              path: file.storedPath || file.path,
-            }));
-            
-            console.log('🔍 [DEBUG] Mapped files from metadata:', {
-              totalMapped: filesList.length,
-              filesWithIds: filesList.filter(f => f.id).length,
-              filesWithThumbnails: filesList.filter(f => f.thumbnailAvailable === true).length,
-              sampleMapped: filesList[0] ? {
-                id: filesList[0].id,
-                thumbnailAvailable: filesList[0].thumbnailAvailable,
-                originalName: filesList[0].originalName
-              } : null
-            });
-            
-            setFileManifest(filesList);
-            setFolderTree(buildTreeFromFiles(filesList));
-            const previews = filesList.slice(0, 50).map((f) => ({
-              path: f.storedPath || f.path || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || ""),
-              fileId: f.id,
-              thumbnailAvailable: f.thumbnailAvailable,
-              url: f.url,
-              thumbUrl: f.thumbUrl,
-            }));
-            setMetadata((prev) => {
-              if (!prev) return null;
-              return { ...prev, previews };
-            });
-          }
+          console.log('🔍 [DEBUG] Metadata fetched (using /files endpoint for file list)');
         }
       } catch (err) {
         console.warn("Failed to fetch metadata for selected version:", err);
@@ -1168,28 +1115,26 @@ const DatasetManager = () => {
         console.warn("fetchFolderSummary failed for version select:", err);
       }
 
-      // Fallback: if metadata.files not available, fetch all files (for tree view)
-      // Check metaJson.files directly (not stale metadata state) to avoid double-fetching
-      if (!metaJson?.files || !Array.isArray(metaJson.files) || metaJson.files.length === 0) {
-        console.log('🔍 [DEBUG] metadata.files not available, using fetchAllFiles (GET /api/dataset/:datasetId/files)');
-        try {
-          const allFiles = await fetchAllFiles(datasetId);
-          setFileManifest(allFiles || []);
-          setFolderTree(buildTreeFromFiles(allFiles || []));
-          const previews = (allFiles || []).slice(0, 50).map((f) => ({
-            path: f.storedPath || f.path || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || ""),
-            fileId: f.id,
-            thumbnailAvailable: f.thumbnailAvailable,
-            url: f.url,
-            thumbUrl: f.thumbUrl,
-          }));
-          setMetadata((prev) => {
-            if (!prev) return null;
-            return { ...prev, previews: previews as any };
-          });
-        } catch (err) {
-          console.warn("Failed to fetch files for selected version:", err);
-        }
+      // Primary method: Always use GET /api/dataset/:datasetId/files endpoint
+      // This ensures correct file.id (MongoDB subdocument _id) and thumbnailAvailable flags
+      console.log('🔍 [DEBUG] Fetching files using GET /api/dataset/:datasetId/files endpoint');
+      try {
+        const allFiles = await fetchAllFiles(datasetId);
+        setFileManifest(allFiles || []);
+        setFolderTree(buildTreeFromFiles(allFiles || []));
+        const previews = (allFiles || []).slice(0, 50).map((f) => ({
+          path: f.storedPath || f.path || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || ""),
+          fileId: f.id,
+          thumbnailAvailable: f.thumbnailAvailable,
+          url: f.url,
+          thumbUrl: f.thumbUrl,
+        }));
+        setMetadata((prev) => {
+          if (!prev) return null;
+          return { ...prev, previews: previews as any };
+        });
+      } catch (err) {
+        console.warn("Failed to fetch files for selected version:", err);
       }
 
       // optionally fetch current status for that version to show progress

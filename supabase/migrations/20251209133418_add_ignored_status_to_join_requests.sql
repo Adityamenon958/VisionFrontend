@@ -11,3 +11,4 @@ ADD CONSTRAINT workspace_join_requests_status_check
 CHECK (status IN ('pending', 'approved', 'rejected', 'ignored', 'email_sent'));
 
 
+
