@@ -223,8 +223,8 @@ export const InviteUserDialog: React.FC<Props> = ({
           onBlur={form.handleBlur("email")}
           error={form.getFieldError("email")}
           touched={form.isFieldTouched("email")}
-          placeholder="user@example.com"
-          required
+            placeholder="user@example.com"
+            required
         />
 
         <FormFieldWrapper
@@ -236,8 +236,8 @@ export const InviteUserDialog: React.FC<Props> = ({
           onBlur={form.handleBlur("name")}
           error={form.getFieldError("name")}
           touched={form.isFieldTouched("name")}
-          placeholder="Optional name"
-        />
+            placeholder="Optional name"
+          />
 
         <div className="flex justify-end">
           <Button type="submit" disabled={loading}>

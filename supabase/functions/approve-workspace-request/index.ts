@@ -148,23 +148,23 @@ const handler = async (req: Request): Promise<Response> => {
 
       // 6) Send approval email to user (if Resend is configured)
       try {
-        await resend.emails.send({
-          from: "VisionM <no-reply@visionm.com>",
-          to: [profile.email],
-          subject: "Workspace Access Approved",
-          html: `
-            <h1>Access Approved</h1>
-            <p>Hi ${profile.name ?? ""},</p>
-            <p>Your request to join the workspace for <strong>${request.company_name}</strong> has been approved.</p>
-            <p>You can access your workspace using the link below:</p>
-            <p>
-              <a href="${workspaceLink}" style="display:inline-block;padding:12px 24px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:4px;">
-                Open Workspace
-              </a>
-            </p>
-            <p>If you did not request this, please ignore this email.</p>
-          `,
-        });
+      await resend.emails.send({
+        from: "VisionM <no-reply@visionm.com>",
+        to: [profile.email],
+        subject: "Workspace Access Approved",
+        html: `
+          <h1>Access Approved</h1>
+          <p>Hi ${profile.name ?? ""},</p>
+          <p>Your request to join the workspace for <strong>${request.company_name}</strong> has been approved.</p>
+          <p>You can access your workspace using the link below:</p>
+          <p>
+            <a href="${workspaceLink}" style="display:inline-block;padding:12px 24px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:4px;">
+              Open Workspace
+            </a>
+          </p>
+          <p>If you did not request this, please ignore this email.</p>
+        `,
+      });
       } catch (emailError) {
         console.error("Error sending approval email:", emailError);
         // Don't fail the whole operation if email fails

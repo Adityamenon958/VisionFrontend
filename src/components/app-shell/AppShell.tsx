@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { AppHeader } from "./AppHeader";
 import { AppSidebar } from "./AppSidebar";
 import { AppBreadcrumbs } from "./Breadcrumbs";
+import { BreadcrumbProvider } from "./breadcrumb-context";
 import { useProfile } from "@/hooks/useProfile";
 import { useRoutePersistence } from "@/hooks/useRoutePersistence";
 import { useToast } from "@/hooks/use-toast";
@@ -66,6 +67,10 @@ const AppShellContent = () => {
 };
 
 export const AppShell = () => {
-  return <AppShellContent />;
+  return (
+    <BreadcrumbProvider>
+      <AppShellContent />
+    </BreadcrumbProvider>
+  );
 };
 

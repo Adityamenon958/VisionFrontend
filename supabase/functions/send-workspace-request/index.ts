@@ -106,8 +106,8 @@ serve(async (req: Request): Promise<Response> => {
     // 3) Send email via Resend (if configured)
     let emailSent = false;
     if (resend) {
-      try {
-        await resend.emails.send({
+    try {
+      await resend.emails.send({
         from: "VisionM <no-reply@your-verified-domain.com>", // must be verified on Resend
         to: [adminEmail],
         subject: `Workspace Join Request — ${companyName}`,
@@ -124,19 +124,19 @@ serve(async (req: Request): Promise<Response> => {
         `,
       });
 
-        emailSent = true;
+      emailSent = true;
 
-        // update row status to email_sent
-        await supabase
-          .from("workspace_join_requests")
-          .update({ status: "email_sent" })
-          .eq("id", requestId);
-      } catch (sendErr) {
-        console.error("Resend error:", sendErr);
-        // update DB to show email failed (so you can retry)
-        await supabase
-          .from("workspace_join_requests")
-          .update({ status: "email_failed", error_message: String(sendErr) })
+      // update row status to email_sent
+      await supabase
+        .from("workspace_join_requests")
+        .update({ status: "email_sent" })
+        .eq("id", requestId);
+    } catch (sendErr) {
+      console.error("Resend error:", sendErr);
+      // update DB to show email failed (so you can retry)
+      await supabase
+        .from("workspace_join_requests")
+        .update({ status: "email_failed", error_message: String(sendErr) })
           .eq("id", requestId);
       }
     } else {

@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
+import { useBreadcrumbs } from "./breadcrumb-context";
 
-interface BreadcrumbItem {
+export interface BreadcrumbItem {
   label: string;
   href?: string;
 }
@@ -26,9 +27,10 @@ export const AppBreadcrumbs: React.FC<BreadcrumbsProps> = ({
   className,
 }) => {
   const location = useLocation();
+  const { items: contextItems } = useBreadcrumbs();
 
   // Auto-generate breadcrumbs from path if items not provided
-  const breadcrumbItems = items || generateBreadcrumbsFromPath(location.pathname);
+  const breadcrumbItems = contextItems || items || generateBreadcrumbsFromPath(location.pathname);
 
   if (breadcrumbItems.length === 0) {
     return null;

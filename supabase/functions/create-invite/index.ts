@@ -238,18 +238,18 @@ serve(async (req: Request) => {
       // Step 2: Send email via Supabase (generates magic link and sends email)
       console.log("Sending invite email via Supabase to:", inviteEmail);
       const { error: otpError } = await supabase.auth.signInWithOtp({
-        email: inviteEmail,
-        options: {
-          emailRedirectTo: inviteLink,
-          data: {
-            company_id: companyId,
-            company_name: company.name ?? null,
-            invite_token: token,
+          email: inviteEmail,
+          options: {
+            emailRedirectTo: inviteLink,
+            data: {
+              company_id: companyId,
+              company_name: company.name ?? null,
+              invite_token: token,
+            },
           },
-        },
-      });
+        });
 
-      if (otpError) {
+        if (otpError) {
         console.error("signInWithOtp error (new user):", otpError);
         
         // Check for rate limit error - check status, code, and message content
@@ -312,19 +312,19 @@ serve(async (req: Request) => {
 
       // Step 1: Try to send email via signInWithOtp (preferred method)
       console.log("Sending invite email via Supabase to existing user:", inviteEmail);
-      const { error: otpError } = await supabase.auth.signInWithOtp({
-        email: inviteEmail,
-        options: {
-          emailRedirectTo: inviteLink,
-          data: {
-            company_id: companyId,
-            company_name: company.name ?? null,
-            invite_token: token,
-          },
-        },
-      });
+          const { error: otpError } = await supabase.auth.signInWithOtp({
+            email: inviteEmail,
+            options: {
+              emailRedirectTo: inviteLink,
+              data: {
+                company_id: companyId,
+                company_name: company.name ?? null,
+                invite_token: token,
+              },
+            },
+          });
 
-      if (otpError) {
+          if (otpError) {
         console.error("signInWithOtp error (existing user):", otpError);
         
         // Check for rate limit error - check status, code, and message content
@@ -400,31 +400,31 @@ serve(async (req: Request) => {
               rateLimitInfo: {
                 message: otpError.message,
                 waitTime: 60, // Default wait time
-              },
+          },
             }),
             { status: 200, headers: { "Content-Type": "application/json", ...CORS } },
           );
         }
 
         // Other errors (not rate limit)
-        await supabase
-          .from("company_invites")
-          .update({
-            status: "email_failed",
-            error_message: otpError.message ?? String(otpError),
-          })
-          .eq("id", inserted.id);
+          await supabase
+            .from("company_invites")
+            .update({
+              status: "email_failed",
+              error_message: otpError.message ?? String(otpError),
+            })
+            .eq("id", inserted.id);
 
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "Failed to send magic link email",
-            details: otpError.message ?? String(otpError),
-            inviteLink,
-          }),
-          { status: 500, headers: { "Content-Type": "application/json", ...CORS } },
-        );
-      }
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "Failed to send magic link email",
+              details: otpError.message ?? String(otpError),
+              inviteLink,
+            }),
+            { status: 500, headers: { "Content-Type": "application/json", ...CORS } },
+          );
+        }
       // signInWithOtp succeeded - email was sent
     }
 

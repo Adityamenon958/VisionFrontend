@@ -1,5 +1,5 @@
 // src/pages/DatasetManager.tsx
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/hooks/useProfile";
@@ -28,7 +28,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { List, X, Download, FileText } from "lucide-react";
+import { List, X, Download, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown } from "lucide-react";
+import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim();
 const apiUrl = (path: string) => {
@@ -118,6 +119,7 @@ const DatasetManager = () => {
   const [project, setProject] = useState<any>(null);
   const [companyName, setCompanyName] = useState<string>("");
   const [version, setVersion] = useState<string>("");
+  const [versionError, setVersionError] = useState<string | null>(null);
 
   const [files, setFiles] = useState<File[]>([]);
   const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
@@ -139,9 +141,12 @@ const DatasetManager = () => {
   const [versions, setVersions] = useState<VersionEntry[]>([]);
   const [selectedVersionDatasetId, setSelectedVersionDatasetId] = useState<string | null>(null);
   const [fileManifest, setFileManifest] = useState<FileEntry[]>([]);
-  const [folderTree, setFolderTree] = useState<any | null>(null);
-  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
+  
+  // File manager view state
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  const [selectedFolderInSidebar, setSelectedFolderInSidebar] = useState<string | "all">("all");
   
   // Drive-style preview state
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
@@ -156,6 +161,25 @@ const DatasetManager = () => {
   const [selectedImageFile, setSelectedImageFile] = useState<FileEntry | null>(null);
   const [selectedLabelFile, setSelectedLabelFile] = useState<FileEntry | null>(null);
   const [labelFileContent, setLabelFileContent] = useState<string | null>(null);
+
+  // Search & Filter state
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [filterType, setFilterType] = useState<"all" | "image" | "label">("all");
+  const [filterFolder, setFilterFolder] = useState<string>("all");
+
+  // Keyboard navigation state
+  const [currentFileIndex, setCurrentFileIndex] = useState<number>(-1);
+  const [navigableFiles, setNavigableFiles] = useState<FileEntry[]>([]);
+
+  // Image zoom & pan state
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [panX, setPanX] = useState<number>(0);
+  const [panY, setPanY] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+
 
   // ------- Auth header helper -------
   const getAuthHeaders = async () => {
@@ -228,6 +252,23 @@ const DatasetManager = () => {
   }, [sessionReady, user, projectId, navigate, toast]);
 
   const displayProjectName = project?.name ?? "Unnamed Project";
+  const { setItems: setBreadcrumbs } = useBreadcrumbs();
+
+  useEffect(() => {
+    const breadcrumbItems = [
+      { label: "Dashboard", href: "/dashboard" },
+      { label: "Projects", href: "/dashboard/projects" },
+      { label: "Manage Projects", href: "/dashboard/projects" },
+      { label: displayProjectName || "Project", href: projectId ? `/dataset/${projectId}` : undefined },
+      { label: "Upload dataset" },
+    ];
+
+    setBreadcrumbs(breadcrumbItems);
+
+    return () => {
+      setBreadcrumbs(null);
+    };
+  }, [displayProjectName, projectId, setBreadcrumbs]);
 
   // ------- Build files from FileList: do NOT filter by extension; include all files -------
   const buildFilesFromFileList = (fileList: FileList): { files: File[] } => {
@@ -613,95 +654,11 @@ const DatasetManager = () => {
   };
 
 
-  // ------- Handle folder selection -------
-  const handleFolderSelect = (folderName: string) => {
-    // Just toggle expansion in tree - no view switching needed
-    const path = folderName;
-    toggleExpanded(path);
-  };
-
   // ------- Handle image click -------
-  const handleImageClick = async (file: FileEntry) => {
-    setSelectedImageFile(file);
-    // Find associated label file
-    const datasetId = selectedVersionDatasetId || currentDatasetId;
-    if (datasetId && file.type === "image") {
-      // Try to find label file in current folder files, or search in all files
-      const baseName = file.originalName.replace(/\.(jpg|jpeg|png)$/i, "");
-      let labelFile = folderFiles.find(
-        (f) => f.type === "label" && f.originalName === `${baseName}.txt`
-      );
-      
-      // If not found in folder files, search in fileManifest
-      if (!labelFile && fileManifest.length > 0) {
-        labelFile = fileManifest.find(
-          (f) => f.type === "label" && f.originalName === `${baseName}.txt` && f.folder === file.folder
-        );
-      }
-      
-      if (labelFile) {
-        setSelectedLabelFile(labelFile);
-        // Fetch label file content - try download endpoint first, then regular file endpoint
-        try {
-          const headers = await getAuthHeaders();
-          let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}/download`);
-          let res = await fetch(url, { method: "GET", headers });
-          
-          // If download endpoint doesn't exist, try regular file endpoint
-          if (!res.ok) {
-            url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
-            res = await fetch(url, { method: "GET", headers });
-          }
-          
-          if (res.ok) {
-            const text = await res.text();
-            setLabelFileContent(text);
-          } else {
-            setLabelFileContent(null);
-          }
-        } catch (err) {
-          console.warn("Failed to fetch label file:", err);
-          setLabelFileContent(null);
-        }
-      } else {
-        setSelectedLabelFile(null);
-        setLabelFileContent(null);
-      }
-    }
-  };
-
-  const fetchFolderSummary = async (datasetId: string) => {
-    try {
-      const headers = await getAuthHeaders();
-      const url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/folders`);
-      const res = await fetch(url, { method: "GET", headers });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json;
-    } catch (err) {
-      console.warn("fetchFolderSummary error:", err);
-      return null;
-    }
-  };
-
-  const buildTreeFromFiles = (filesList: FileEntry[]) => {
-    console.log('🔍 [DEBUG] Building tree from:', {
-      dataSource: 'FileEntry[] from fetchFileManifest/fetchAllFiles',
-      totalFiles: filesList.length,
-      filesHaveIds: filesList.every(f => f.id),
-      filesWithIds: filesList.filter(f => f.id).length,
-      filesWithThumbnails: filesList.filter(f => f.thumbnailAvailable === true).length,
-      sampleFile: filesList[0] ? {
-        id: filesList[0].id,
-        thumbnailAvailable: filesList[0].thumbnailAvailable,
-        originalName: filesList[0].originalName
-      } : null
-    });
-    
-    const root: any = { type: "folder", name: "", children: [] };
-    
-    // Step 1: Deduplicate files by originalName + type combination
-    // Prefer files from original folder structure over train/val/test copies
+  // Filter files based on search query and filters
+  // Deduplicate files to ensure no duplicates in display
+  // Must be defined before useEffect that uses it
+  const deduplicateFiles = useCallback((filesList: FileEntry[]): FileEntry[] => {
     const fileMap = new Map<string, FileEntry>();
     
     for (const f of filesList) {
@@ -780,59 +737,265 @@ const DatasetManager = () => {
       }
     }
     
-    // Step 2: Build tree from deduplicated files
-    const deduplicatedFiles = Array.from(fileMap.values());
+    return Array.from(fileMap.values());
+  }, []);
+
+  const getFilteredFiles = useCallback(() => {
+    let filtered = fileManifest;
     
-    for (const f of deduplicatedFiles) {
-      const pathToUse = f.storedPath || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || f.path || "");
-      const parts = pathToUse.split("/").filter(Boolean);
-      let node = root;
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const isFile = i === parts.length - 1;
-        if (isFile) {
-          const filePath = f.storedPath || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || f.path || "");
-          // Check if file already exists in this node to prevent duplicates
-          const existingFile = node.children.find((c: any) => c.type === "file" && c.fileId === f.id);
-          if (!existingFile) {
-            const fileNode = {
-              type: "file",
-              name: part,
-              path: filePath,
-              fileId: f.id,
-              fileType: f.type || "image", // Preserve file type (image/label) - using fileType to avoid conflict with node.type
-              // Use actual thumbnailAvailable from backend (don't default to true)
-              thumbnailAvailable: f.thumbnailAvailable,
-              url: f.url,
-              // Legacy field for backward compatibility
-              thumbUrl: f.thumbUrl,
-            };
-            
-            // Debug log for files without IDs
-            if (!f.id) {
-              console.warn('⚠️ [DEBUG] File without ID added to tree:', {
-                name: part,
-                path: filePath,
-                type: f.type,
-                thumbnailAvailable: f.thumbnailAvailable
-              });
-            }
-            
-            node.children.push(fileNode);
+    // Apply type filter
+    if (filterType !== "all") {
+      filtered = filtered.filter(f => f.type === filterType);
+    }
+    
+    // Apply folder filter
+    if (filterFolder !== "all") {
+      filtered = filtered.filter(f => f.folder === filterFolder);
+    }
+    
+    // Apply search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(f => 
+        f.originalName?.toLowerCase().includes(query) ||
+        f.name?.toLowerCase().includes(query) ||
+        f.folder?.toLowerCase().includes(query)
+      );
+    }
+    
+    return filtered;
+  }, [fileManifest, filterType, filterFolder, searchQuery]);
+
+  // Update navigable files when filters change - apply same deduplication
+  useEffect(() => {
+    const filtered = getFilteredFiles();
+    // Apply same deduplication logic to ensure navigation matches display
+    const deduplicated = deduplicateFiles(filtered);
+    setNavigableFiles(deduplicated);
+  }, [getFilteredFiles, deduplicateFiles]);
+
+  // Keyboard event handler will be defined after navigation functions
+
+  // Zoom and pan functions
+  const handleZoomIn = () => {
+    setZoomLevel(prev => Math.min(prev + 0.25, 5));
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel(prev => Math.max(prev - 0.25, 0.5));
+  };
+
+  const handleResetZoom = () => {
+    setZoomLevel(1);
+    setPanX(0);
+    setPanY(0);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (zoomLevel > 1) {
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isDragging && zoomLevel > 1) {
+      setPanX(e.clientX - dragStart.x);
+      setPanY(e.clientY - dragStart.y);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      setZoomLevel(prev => Math.max(0.5, Math.min(5, prev + delta)));
+    }
+  };
+
+  const handleImageClick = useCallback(async (file: FileEntry) => {
+    setSelectedImageFile(file);
+    // Reset zoom and pan when opening new image
+    setZoomLevel(1);
+    setPanX(0);
+    setPanY(0);
+    
+    // Find associated label file
+    const datasetId = selectedVersionDatasetId || currentDatasetId;
+    if (datasetId && file.type === "image") {
+      // Try to find label file in current folder files, or search in all files
+      const baseName = file.originalName.replace(/\.(jpg|jpeg|png)$/i, "");
+      let labelFile = folderFiles.find(
+        (f) => f.type === "label" && f.originalName === `${baseName}.txt`
+      );
+      
+      // If not found in folder files, search in fileManifest
+      if (!labelFile && fileManifest.length > 0) {
+        labelFile = fileManifest.find(
+          (f) => f.type === "label" && f.originalName === `${baseName}.txt` && f.folder === file.folder
+        );
+      }
+      
+      if (labelFile) {
+        setSelectedLabelFile(labelFile);
+        // Fetch label file content - try download endpoint first, then regular file endpoint
+        try {
+          const headers = await getAuthHeaders();
+          let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}/download`);
+          let res = await fetch(url, { method: "GET", headers });
+          
+          // If download endpoint doesn't exist, try regular file endpoint
+          if (!res.ok) {
+            url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
+            res = await fetch(url, { method: "GET", headers });
           }
-        } else {
-          let child = node.children.find((c: any) => c.type === "folder" && c.name === part);
-          if (!child) {
-            child = { type: "folder", name: part, children: [] };
-            node.children.push(child);
+          
+          if (res.ok) {
+            const text = await res.text();
+            setLabelFileContent(text);
+          } else {
+            setLabelFileContent(null);
           }
-          node = child;
+        } catch (err) {
+          console.warn("Failed to fetch label file:", err);
+          setLabelFileContent(null);
         }
+      } else {
+        setSelectedLabelFile(null);
+        setLabelFileContent(null);
       }
     }
+    
+    // Set current file index for keyboard navigation - use navigableFiles (already deduplicated)
+    const index = navigableFiles.findIndex(f => f.id === file.id);
+    setCurrentFileIndex(index >= 0 ? index : -1);
+  }, [selectedVersionDatasetId, currentDatasetId, folderFiles, fileManifest, navigableFiles]);
 
-    return root;
+  const handleLabelClick = useCallback(async (file: FileEntry) => {
+    setSelectedLabelFile(file);
+    setSelectedImageFile(null); // Clear image if any
+    // Reset zoom and pan
+    setZoomLevel(1);
+    setPanX(0);
+    setPanY(0);
+    
+    const datasetId = selectedVersionDatasetId || currentDatasetId;
+    if (datasetId && file.type === "label") {
+      // Fetch label file content - try download endpoint first, then regular file endpoint
+      try {
+        const headers = await getAuthHeaders();
+        let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/download`);
+        let res = await fetch(url, { method: "GET", headers });
+        
+        // If download endpoint doesn't exist, try regular file endpoint
+        if (!res.ok) {
+          url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}`);
+          res = await fetch(url, { method: "GET", headers });
+        }
+        
+        if (res.ok) {
+          const text = await res.text();
+          setLabelFileContent(text);
+        } else {
+          setLabelFileContent(null);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch label file:", err);
+        setLabelFileContent(null);
+      }
+    }
+    
+    // Set current file index for keyboard navigation - use navigableFiles (already deduplicated)
+    const index = navigableFiles.findIndex(f => f.id === file.id);
+    setCurrentFileIndex(index >= 0 ? index : -1);
+  }, [selectedVersionDatasetId, currentDatasetId, navigableFiles]);
+
+  // Keyboard navigation functions - defined after handleImageClick and handleLabelClick
+  // Calculate index directly from current file to avoid stale state issues
+  const navigateToNextFile = useCallback(() => {
+    if (navigableFiles.length === 0) return;
+    const currentFile = selectedImageFile || selectedLabelFile;
+    if (!currentFile) return;
+    
+    // Find current file's index directly from navigableFiles (not from state)
+    const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
+    if (currentIndex === -1) return; // Current file not found in navigable list
+    
+    const nextIndex = (currentIndex + 1) % navigableFiles.length;
+    const nextFile = navigableFiles[nextIndex];
+    if (nextFile.type === "image") {
+      handleImageClick(nextFile);
+    } else if (nextFile.type === "label") {
+      handleLabelClick(nextFile);
+    }
+  }, [navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
+
+  const navigateToPreviousFile = useCallback(() => {
+    if (navigableFiles.length === 0) return;
+    const currentFile = selectedImageFile || selectedLabelFile;
+    if (!currentFile) return;
+    
+    // Find current file's index directly from navigableFiles (not from state)
+    const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
+    if (currentIndex === -1) return; // Current file not found in navigable list
+    
+    const prevIndex = currentIndex <= 0 ? navigableFiles.length - 1 : currentIndex - 1;
+    const prevFile = navigableFiles[prevIndex];
+    if (prevFile.type === "image") {
+      handleImageClick(prevFile);
+    } else if (prevFile.type === "label") {
+      handleLabelClick(prevFile);
+    }
+  }, [navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
+
+  // Keyboard event handler - defined after navigation functions
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if modal is open
+      if (!selectedImageFile && !selectedLabelFile) return;
+      
+      // Prevent default if we're handling the key
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Escape") {
+        e.preventDefault();
+      }
+      
+      if (e.key === "ArrowRight") {
+        navigateToNextFile();
+      } else if (e.key === "ArrowLeft") {
+        navigateToPreviousFile();
+      } else if (e.key === "Escape") {
+        setSelectedImageFile(null);
+        setSelectedLabelFile(null);
+        setLabelFileContent(null);
+        setZoomLevel(1);
+        setPanX(0);
+        setPanY(0);
+        setIsFullscreen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedImageFile, selectedLabelFile, navigateToNextFile, navigateToPreviousFile]);
+
+  const fetchFolderSummary = async (datasetId: string) => {
+    try {
+      const headers = await getAuthHeaders();
+      const url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/folders`);
+      const res = await fetch(url, { method: "GET", headers });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json;
+    } catch (err) {
+      console.warn("fetchFolderSummary error:", err);
+      return null;
+    }
   };
+
 
   // ------- Helper: compute percent robustly from status object -------
   const computePercentFromStatus = (s: StatusResponse | null): number | null => {
@@ -895,14 +1058,12 @@ const DatasetManager = () => {
                 console.warn("Failed to fetch final metadata:", err);
               }
 
-              // fetch full file manifest and build tree
+              // fetch full file manifest
               try {
                 const allFiles = await fetchAllFiles(datasetId);
                 setFileManifest(allFiles || []);
-                const tree = buildTreeFromFiles(allFiles || []);
-                setFolderTree(tree);
               } catch (err) {
-                console.warn("Failed to fetch files for tree after ready:", err);
+                console.warn("Failed to fetch files after ready:", err);
               }
             } else {
               setUploadStatus("failed");
@@ -938,6 +1099,8 @@ const DatasetManager = () => {
 
   // ------- Upload handler (POST /dataset/upload) -------
   const handleUpload = async () => {
+    const trimmedVersion = version.trim();
+
     if (!project) {
       toast({
         title: "Missing project",
@@ -956,14 +1119,16 @@ const DatasetManager = () => {
       return;
     }
 
-    if (!version.trim()) {
+    if (!trimmedVersion) {
+      setVersionError("Please enter a version before uploading.");
       toast({
         title: "Version required",
-        description: "Please enter a version name before uploading.",
+        description: "Please enter a version before uploading.",
         variant: "destructive",
       });
       return;
     }
+    setVersionError(null);
 
     const projectName = displayProjectName;
     const company = companyName || "Unknown";
@@ -976,7 +1141,7 @@ const DatasetManager = () => {
       const formData = new FormData();
       formData.append("company", company);
       formData.append("project", projectName);
-      formData.append("version", version.trim());
+      formData.append("version", trimmedVersion);
 
       const {
         data: { session },
@@ -1063,9 +1228,8 @@ const DatasetManager = () => {
       try {
         const allFiles = await fetchAllFiles(datasetId);
         setFileManifest(allFiles || []);
-        setFolderTree(buildTreeFromFiles(allFiles || []));
       } catch (err) {
-        console.warn("Failed to fetch initial files for tree:", err);
+        console.warn("Failed to fetch initial files:", err);
       }
 
       // start polling for server-side processing
@@ -1121,7 +1285,6 @@ const DatasetManager = () => {
       try {
         const allFiles = await fetchAllFiles(datasetId);
         setFileManifest(allFiles || []);
-        setFolderTree(buildTreeFromFiles(allFiles || []));
         const previews = (allFiles || []).slice(0, 50).map((f) => ({
           path: f.storedPath || f.path || (f.folder ? `${f.folder}/${f.originalName || f.name || ""}` : f.originalName || f.name || ""),
           fileId: f.id,
@@ -1184,160 +1347,258 @@ const DatasetManager = () => {
     }
   };
 
-  const toggleExpanded = (path: string) => {
-    setExpandedPaths((s) => ({ ...s, [path]: !s[path] }));
+  // Group files by folder for display
+  const groupedFiles = useMemo(() => {
+    const groups = new Map<string, FileEntry[]>();
+    
+    navigableFiles.forEach(file => {
+      const folder = file.folder || "Uncategorized";
+      if (!groups.has(folder)) {
+        groups.set(folder, []);
+      }
+      groups.get(folder)!.push(file);
+    });
+    
+    // Convert to array and sort by folder name
+    return Array.from(groups.entries())
+      .map(([folder, files]) => ({
+        folder,
+        files: files.sort((a, b) => a.originalName.localeCompare(b.originalName))
+      }))
+      .sort((a, b) => a.folder.localeCompare(b.folder));
+  }, [navigableFiles]);
+
+  // Extract folder list for sidebar
+  const folders = useMemo(() => {
+    const folderMap = new Map<string, number>();
+    navigableFiles.forEach(file => {
+      const folder = file.folder || "Uncategorized";
+      folderMap.set(folder, (folderMap.get(folder) || 0) + 1);
+    });
+    return Array.from(folderMap.entries()).map(([name, count]) => ({
+      name,
+      count,
+      path: name
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [navigableFiles]);
+
+  // Filter displayed files based on selected folder
+  const displayedGroups = useMemo(() => {
+    if (selectedFolderInSidebar === "all") {
+      return groupedFiles;
+    }
+    return groupedFiles.filter(group => group.folder === selectedFolderInSidebar);
+  }, [groupedFiles, selectedFolderInSidebar]);
+
+  // Lazy Thumbnail Component - using native lazy loading with IntersectionObserver fallback
+  const LazyThumbnail = ({ 
+    thumbEndpoint, 
+    fileId, 
+    datasetId, 
+    alt, 
+    onClick,
+    fetchThumbnailAsObjectUrl,
+    className = "w-12 h-8 object-cover rounded cursor-pointer"
+  }: { 
+    thumbEndpoint: string; 
+    fileId: string; 
+    datasetId: string; 
+    alt: string; 
+    onClick: () => void;
+    fetchThumbnailAsObjectUrl: (datasetId: string, fileId: string) => Promise<string | null>;
+    className?: string;
+  }) => {
+    const [imgSrc, setImgSrc] = useState<string | null>(null);
+    const [shouldLoad, setShouldLoad] = useState(false);
+    const imgRef = useRef<HTMLImageElement>(null);
+
+    useEffect(() => {
+      // Use IntersectionObserver to detect when element is in viewport
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              setShouldLoad(true);
+              observer.disconnect();
+            }
+          });
+        },
+        { 
+          rootMargin: '100px', // Start loading 100px before entering viewport
+          threshold: 0.01
+        }
+      );
+
+      const currentRef = imgRef.current;
+      if (currentRef) {
+        observer.observe(currentRef);
+      }
+
+      // Fallback: if observer doesn't trigger within 2 seconds, load anyway
+      const fallbackTimer = setTimeout(() => {
+        setShouldLoad(true);
+      }, 2000);
+
+      return () => {
+        observer.disconnect();
+        clearTimeout(fallbackTimer);
+      };
+    }, []);
+
+    useEffect(() => {
+      if (shouldLoad && !imgSrc) {
+        setImgSrc(thumbEndpoint);
+      }
+    }, [shouldLoad, thumbEndpoint, imgSrc]);
+
+    return (
+      <img
+        ref={imgRef}
+        src={imgSrc || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='32'%3E%3Crect width='48' height='32' fill='%23f3f4f6'/%3E%3C/svg%3E"}
+        className={className}
+        alt={alt}
+        onClick={onClick}
+        loading="lazy"
+        onError={async (e) => {
+          if (imgSrc === thumbEndpoint) {
+            const objUrl = await fetchThumbnailAsObjectUrl(datasetId, fileId);
+            if (objUrl) {
+              setImgSrc(objUrl);
+            } else {
+              (e.target as HTMLImageElement).src = "/placeholder-image.png";
+              (e.target as HTMLImageElement).style.opacity = "0.5";
+            }
+          }
+        }}
+      />
+    );
   };
 
-  function TreeNode({ node, parentPath = "" }: { node: any; parentPath?: string }) {
-    // Add debug log at the start of the component for file nodes
-    if (node.type === "file") {
-      console.log('🔍 [DEBUG] TreeNode rendered (file):', {
-        nodeName: node.name,
-        nodeFileId: node.fileId,
-        nodeThumbnailAvailable: node.thumbnailAvailable,
-        nodeType: (node as any).fileType || node.type,
-        hasFileId: !!node.fileId,
-        hasThumbnailAvailable: node.thumbnailAvailable === true,
-        fileType: (node as any).fileType
-      });
-    }
-    const path = parentPath ? `${parentPath}/${node.name}`.replace(/^\/+/, "") : node.name || "";
-    const isFolder = node.type === "folder";
+  // File Card Component (Grid View)
+  const FileCard = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
+    const isImage = file.type === "image";
+    const isLabel = file.type === "label";
+    const thumbEndpoint = datasetId && file.thumbnailAvailable === true && file.id && isImage
+      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+      : null;
 
-    if (isFolder) {
-      const children: any[] = node.children || [];
-      const expanded = !!expandedPaths[path];
-      const folderName = node.name || "";
-      return (
-        <div className="pl-3">
-          <div className="flex items-center gap-2">
-            <span 
-              className="text-sm cursor-pointer" 
-              onClick={() => toggleExpanded(path)}
-            >
-              {expanded ? "▾" : "▸"}
-            </span>
-            <span 
-              className="font-medium text-sm cursor-pointer hover:text-primary"
-              onClick={() => {
-                if (folderName) {
-                  handleFolderSelect(folderName);
-                } else {
-                  toggleExpanded(path);
-                }
-              }}
-            >
-              {node.name || "(root)"}
-            </span>
-          </div>
-          {expanded && (
-            <div className="pl-4">
-              {children.map((c: any, idx: number) => (
-                <div key={idx}>
-                  <TreeNode node={c} parentPath={path} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    } else {
-      const datasetId = selectedVersionDatasetId || currentDatasetId;
-      
-      const fileEntry: FileEntry = {
-        id: node.fileId,
-        originalName: node.name,
-        storedPath: node.path,
-        folder: node.folder,
-        type: (node as any).fileType || node.type || "image", // Use fileType if available, fallback to node.type
-        thumbnailAvailable: node.thumbnailAvailable,
-        url: node.url,
-      };
-
-      const fileType = (node as any).fileType || node.type || "image";
-      const isImage = fileType === "image";
-      const isLabel = fileType === "label";
-      
-      // Only generate thumbnail endpoint if:
-      // 1. datasetId exists
-      // 2. thumbnailAvailable is explicitly true (not undefined, not false)
-      // 3. fileId exists (must be from GET /api/dataset/:datasetId/files endpoint)
-      // 4. file type is image
-      const fileId = node.fileId; // Must be from GET /api/dataset/:datasetId/files (file.id field)
-      
-      console.log('🔍 [DEBUG] Thumbnail URL construction:', {
-        datasetId,
-        fileId,
-        thumbnailAvailable: node.thumbnailAvailable,
-        isImage,
-        fileType: (node as any).fileType || node.type,
-        willBuildUrl: datasetId && node.thumbnailAvailable === true && fileId && isImage,
-        conditions: {
-          hasDatasetId: !!datasetId,
-          thumbnailAvailableIsTrue: node.thumbnailAvailable === true,
-          hasFileId: !!fileId,
-          isImageType: isImage
-        }
-      });
-      
-      const thumbEndpoint = datasetId && node.thumbnailAvailable === true && fileId && isImage
-        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(fileId)}/thumbnail`) 
-        : null;
-      
-      console.log('🔍 [DEBUG] Thumbnail endpoint:', thumbEndpoint);
-      const fileEndpoint = datasetId 
-        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(node.fileId)}`) 
-        : "#";
-
-      return (
-        <div className="pl-6 py-1 flex items-center gap-3 text-xs">
-          {/* Show thumbnail for images only */}
-          {isImage && node.thumbUrl ? (
-            <img src={node.thumbUrl} className="w-12 h-8 object-cover rounded" alt={node.name} />
-          ) : isImage && node.thumbnailAvailable === true && thumbEndpoint ? (
-            // Only show thumbnail if thumbnailAvailable is explicitly true
-            <img
-              src={thumbEndpoint}
-              className="w-12 h-8 object-cover rounded cursor-pointer"
-              alt={node.name}
-              onClick={() => handleImageClick(fileEntry)}
-              onError={async (e) => {
-                // Try blob fetch as fallback if direct thumbnail URL fails
-                // Use fileId from files endpoint (must be from GET /api/dataset/:datasetId/files)
-                const fileIdToUse = node.fileId;
-                const objUrl = await fetchThumbnailAsObjectUrl(datasetId!, fileIdToUse);
-                if (objUrl) {
-                  (e.target as HTMLImageElement).src = objUrl;
-                } else {
-                  // 404 or other error - show placeholder instead of hiding
-                  (e.target as HTMLImageElement).src = "/placeholder-image.png";
-                  (e.target as HTMLImageElement).style.opacity = "0.5";
-                }
-              }}
+    return (
+      <div
+        className="group relative bg-card border rounded-lg overflow-hidden cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
+        onClick={() => {
+          if (isImage) {
+            handleImageClick(file);
+          } else if (isLabel) {
+            handleLabelClick(file);
+          }
+        }}
+      >
+        <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden relative">
+          {isImage && thumbEndpoint ? (
+            <LazyThumbnail
+              thumbEndpoint={thumbEndpoint}
+              fileId={file.id!}
+              datasetId={datasetId}
+              alt={file.originalName}
+              onClick={() => handleImageClick(file)}
+              fetchThumbnailAsObjectUrl={fetchThumbnailAsObjectUrl}
+              className="w-full h-full object-cover cursor-pointer"
             />
           ) : isLabel ? (
-            // Show file icon for label files
-            <FileText className="w-12 h-8 text-muted-foreground flex-shrink-0" />
-          ) : null}
-
-          <a 
-            href={node.url || fileEndpoint} 
-            target="_blank" 
-            rel="noreferrer" 
-            className="break-words"
-            onClick={(e) => {
-              if (isImage) {
-                e.preventDefault();
-                handleImageClick(fileEntry);
-              }
-            }}
-          >
-            {node.name}
-          </a>
+            <FileText className="w-16 h-16 text-muted-foreground" />
+          ) : (
+            <div className="w-full h-full bg-muted" />
+          )}
         </div>
-      );
-    }
-  }
+        <div className="p-2">
+          <p className="text-xs font-medium truncate" title={file.originalName}>
+            {file.originalName}
+          </p>
+          <p className="text-xs text-muted-foreground truncate">{file.folder || "Uncategorized"}</p>
+        </div>
+      </div>
+    );
+  };
+
+  // File List Item Component (List View)
+  const FileListItem = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
+    const isImage = file.type === "image";
+    const isLabel = file.type === "label";
+    const thumbEndpoint = datasetId && file.thumbnailAvailable === true && file.id && isImage
+      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+      : null;
+
+    return (
+      <div
+        className="grid grid-cols-[48px_1fr_120px_80px] gap-4 p-3 border-b hover:bg-muted/50 cursor-pointer transition-colors"
+        onClick={() => {
+          if (isImage) {
+            handleImageClick(file);
+          } else if (isLabel) {
+            handleLabelClick(file);
+          }
+        }}
+      >
+        <div className="w-12 h-8 bg-muted rounded flex items-center justify-center overflow-hidden">
+          {isImage && thumbEndpoint ? (
+            <LazyThumbnail
+              thumbEndpoint={thumbEndpoint}
+              fileId={file.id!}
+              datasetId={datasetId}
+              alt={file.originalName}
+              onClick={() => handleImageClick(file)}
+              fetchThumbnailAsObjectUrl={fetchThumbnailAsObjectUrl}
+            />
+          ) : isLabel ? (
+            <FileText className="w-6 h-6 text-muted-foreground" />
+          ) : null}
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate" title={file.originalName}>
+            {file.originalName}
+          </p>
+          <p className="text-xs text-muted-foreground truncate">{file.folder || "Uncategorized"}</p>
+        </div>
+        <div className="text-xs text-muted-foreground flex items-center">
+          {file.size ? `${(file.size / 1024).toFixed(1)} KB` : "-"}
+        </div>
+        <div className="text-xs text-muted-foreground flex items-center">
+          {isImage ? "Image" : isLabel ? "Label" : "File"}
+        </div>
+      </div>
+    );
+  };
+
+  // Folder Section Component
+  const FolderSection = ({ folderName, files, datasetId }: { folderName: string; files: FileEntry[]; datasetId: string }) => {
+    if (files.length === 0) return null;
+
+    return (
+      <div className="mb-6">
+        <div className="sticky top-0 bg-background z-10 py-3 border-b mb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-sm">{folderName}</h3>
+              <p className="text-xs text-muted-foreground">{files.length} file{files.length !== 1 ? 's' : ''}</p>
+            </div>
+          </div>
+        </div>
+        {viewMode === "grid" ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            {files.map((file) => (
+              <FileCard key={file.id} file={file} datasetId={datasetId} />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-0">
+            {files.map((file) => (
+              <FileListItem key={file.id} file={file} datasetId={datasetId} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ------- Render -------
   return (
@@ -1447,7 +1708,7 @@ const DatasetManager = () => {
 
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
+          <div className="flex items-end gap-2">
             <div className="w-48">
               <Label htmlFor="version" className="text-xs uppercase text-muted-foreground">
                 Version <span className="text-destructive">*</span>
@@ -1456,14 +1717,26 @@ const DatasetManager = () => {
                 id="version" 
                 placeholder="e.g. v1" 
                 value={version} 
-                onChange={(e) => setVersion(e.target.value)}
-                className={version.trim() === "" ? "border-destructive" : ""}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setVersion(next);
+                  if (versionError && next.trim()) {
+                    setVersionError(null);
+                  }
+                }}
+                className={versionError ? "border-destructive" : ""}
                 required
               />
+              {versionError && (
+                <p className="mt-1 text-xs text-destructive" role="alert">
+                  {versionError}
+                </p>
+              )}
             </div>
             <Button 
               onClick={handleUpload} 
-              disabled={uploadStatus === "uploading" || files.length === 0 || version.trim() === ""}
+              disabled={uploadStatus === "uploading" || files.length === 0}
+              className="h-10"
             >
               {uploadStatus === "uploading" ? "Uploading..." : "Upload"}
             </Button>
@@ -1513,38 +1786,40 @@ const DatasetManager = () => {
         </div>
       )}
 
-      {/* Versions list */}
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Versions</CardTitle>
-          <CardDescription>Click a version to view its stored subfolders & files</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {versions.length === 0 ? (
-            <div className="text-sm text-muted-foreground">No versions yet.</div>
-          ) : (
-            <div className="space-y-1">
-              {versions.map((v) => (
-                <div key={v.datasetId} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
-                      <div className="font-medium">{v.version || v.datasetId}</div>
-                      <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
-                    </button>
-                    {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
+      {/* Versions and Dataset Summary - Side by Side Layout */}
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Versions list */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Versions</CardTitle>
+            <CardDescription>Click a version to view its stored subfolders & files</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {versions.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No versions yet.</div>
+            ) : (
+              <div className="space-y-1">
+                {versions.map((v) => (
+                  <div key={v.datasetId} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
+                        <div className="font-medium">{v.version || v.datasetId}</div>
+                        <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
+                      </button>
+                      {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
+                    </div>
+                    <div>
+                      <a className="text-xs" href={apiUrl(`/dataset/${encodeURIComponent(v.datasetId)}/download`)} target="_blank" rel="noreferrer">Download</a>
+                    </div>
                   </div>
-                  <div>
-                    <a className="text-xs" href={apiUrl(`/dataset/${encodeURIComponent(v.datasetId)}/download`)} target="_blank" rel="noreferrer">Download</a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-      {metadata && (
-        <div className="mt-4 max-w-2xl space-y-4">
+        {/* Dataset Summary */}
+        {metadata && (
           <Card>
             <CardHeader>
               <CardTitle>Dataset summary</CardTitle>
@@ -1572,25 +1847,162 @@ const DatasetManager = () => {
               )}
             </CardContent>
           </Card>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* File Browser - Tree View */}
+      {/* File Browser - Modern File Manager View */}
       {selectedVersionDatasetId && metadata && (
         <Card className="mt-6">
           <CardHeader>
-            <div>
-              <CardTitle>File Browser</CardTitle>
-              <CardDescription>Browse all dataset files</CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>File Browser</CardTitle>
+                <CardDescription>Browse all dataset files</CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={viewMode === "grid" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setViewMode("grid")}
+                  title="Grid View"
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant={viewMode === "list" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setViewMode("list")}
+                  title="List View"
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </CardHeader>
-          <CardContent>
-            <div>
-              {folderTree ? (
-                <TreeNode node={folderTree} />
-              ) : (
-                <div className="text-sm text-muted-foreground">No files available</div>
-              )}
+          <CardContent className="p-0 relative">
+            {/* Search & Filter UI */}
+            <div className="p-6 pb-4 space-y-3 border-b">
+              <div className="flex flex-col sm:flex-row gap-3">
+                {/* Search Input */}
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search files by name or folder..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                
+                {/* Type Filter */}
+                <Select value={filterType} onValueChange={(value: "all" | "image" | "label") => setFilterType(value)}>
+                  <SelectTrigger className="w-full sm:w-[150px]">
+                    <SelectValue placeholder="File Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="image">Images</SelectItem>
+                    <SelectItem value="label">Labels</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                {/* Folder Filter */}
+                <Select value={filterFolder} onValueChange={(value) => setFilterFolder(value)}>
+                  <SelectTrigger className="w-full sm:w-[150px]">
+                    <SelectValue placeholder="Folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Folders</SelectItem>
+                    {metadata.folders && Object.keys(metadata.folders).map((folder) => (
+                      <SelectItem key={folder} value={folder}>{folder}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Results count */}
+              {searchQuery || filterType !== "all" || filterFolder !== "all" ? (
+                <div className="text-xs text-muted-foreground">
+                  Showing {getFilteredFiles().length} of {fileManifest.length} files
+                </div>
+              ) : null}
+            </div>
+
+            {/* File Manager Layout */}
+            <div className="flex h-[600px]">
+              {/* Sidebar */}
+              <div className={`${sidebarCollapsed ? 'w-0' : 'w-64'} border-r transition-all duration-200 overflow-hidden`}>
+                <div className="h-full overflow-y-auto p-4">
+                  <div className="space-y-1">
+                    <button
+                      className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        selectedFolderInSidebar === "all"
+                          ? "bg-primary text-primary-foreground"
+                          : "hover:bg-muted"
+                      }`}
+                      onClick={() => setSelectedFolderInSidebar("all")}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-2">
+                          <Folder className="h-4 w-4" />
+                          All Files
+                        </span>
+                        <span className="text-xs opacity-70">{navigableFiles.length}</span>
+                      </div>
+                    </button>
+                    {folders.map((folder) => (
+                      <button
+                        key={folder.name}
+                        className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                          selectedFolderInSidebar === folder.name
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-muted"
+                        }`}
+                        onClick={() => setSelectedFolderInSidebar(folder.name)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-2">
+                            <Folder className="h-4 w-4" />
+                            <span className="truncate">{folder.name}</span>
+                          </span>
+                          <span className="text-xs opacity-70">{folder.count}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Main Content Area */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {displayedGroups.length === 0 ? (
+                  <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+                    No files available
+                  </div>
+                ) : (
+                  displayedGroups.map((group) => (
+                    <FolderSection
+                      key={group.folder}
+                      folderName={group.folder}
+                      files={group.files}
+                      datasetId={selectedVersionDatasetId || currentDatasetId || ""}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Sidebar Toggle Button */}
+            <div className="absolute left-64 top-1/2 transform -translate-y-1/2 z-10 transition-all duration-200" style={{ left: sidebarCollapsed ? 0 : '16rem' }}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-r-none rounded-l-none border-l-0 h-8 w-6 p-0"
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+              >
+                {sidebarCollapsed ? <ChevronRightIcon className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -1598,26 +2010,35 @@ const DatasetManager = () => {
 
 
       {/* Image Viewer Modal */}
-      <Dialog open={!!selectedImageFile} onOpenChange={(open) => {
+      <Dialog open={!!selectedImageFile || !!selectedLabelFile} onOpenChange={(open) => {
         if (!open) {
           setSelectedImageFile(null);
           setSelectedLabelFile(null);
           setLabelFileContent(null);
+          setZoomLevel(1);
+          setPanX(0);
+          setPanY(0);
+          setIsFullscreen(false);
         }
       }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle>{selectedImageFile?.originalName}</DialogTitle>
-            <DialogDescription>
-              {selectedImageFile?.folder && `Folder: ${selectedImageFile.folder}`}
-              {selectedImageFile?.size && ` • Size: ${(selectedImageFile.size / 1024).toFixed(1)} KB`}
-            </DialogDescription>
+        <DialogContent className={`${isFullscreen ? 'max-w-[95vw] max-h-[95vh]' : 'max-w-6xl'} max-h-[90vh] overflow-hidden flex flex-col`}>
+          <DialogHeader className="flex-shrink-0">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <DialogTitle>{selectedImageFile?.originalName || selectedLabelFile?.originalName}</DialogTitle>
+                <DialogDescription>
+                  {(selectedImageFile?.folder || selectedLabelFile?.folder) && `Folder: ${selectedImageFile?.folder || selectedLabelFile?.folder}`}
+                  {(selectedImageFile?.size || selectedLabelFile?.size) && ` • Size: ${((selectedImageFile?.size || selectedLabelFile?.size || 0) / 1024).toFixed(1)} KB`}
+                  {navigableFiles.length > 0 && ` • ${currentFileIndex + 1} of ${navigableFiles.length}`}
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
-          <div className="space-y-4">
-            {/* Full-size Image */}
+          
+          <div className="flex-1 overflow-auto space-y-4">
+            {/* Full-size Image with Zoom & Pan */}
             {selectedImageFile && (() => {
               const datasetId = selectedVersionDatasetId || currentDatasetId || "";
-              // Try download endpoint first, fallback to regular file endpoint, then thumbnail
               const imageUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/download`);
               const fallbackUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
               const thumbnailUrl = selectedImageFile.thumbnailAvailable 
@@ -1625,23 +2046,98 @@ const DatasetManager = () => {
                 : null;
               
               return (
-                <div className="flex justify-center">
-                  <img
-                    src={imageUrl}
-                    alt={selectedImageFile.originalName}
-                    className="max-w-full max-h-[60vh] object-contain"
-                    onError={(e) => {
-                      // Try fallback URL
-                      if ((e.target as HTMLImageElement).src !== fallbackUrl) {
-                        (e.target as HTMLImageElement).src = fallbackUrl;
-                      } else if (thumbnailUrl) {
-                        // Last resort: use thumbnail
-                        (e.target as HTMLImageElement).src = thumbnailUrl;
-                      } else {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }
+                <div className="flex justify-center relative">
+                  {/* Zoom Controls */}
+                  <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 bg-background/80 backdrop-blur-sm rounded-md p-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleZoomIn}
+                      className="h-8 w-8 p-0"
+                      title="Zoom In (Ctrl+Scroll)"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleZoomOut}
+                      className="h-8 w-8 p-0"
+                      title="Zoom Out (Ctrl+Scroll)"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleResetZoom}
+                      className="h-8 w-8 p-0"
+                      title="Reset Zoom"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsFullscreen(!isFullscreen)}
+                      className="h-8 w-8 p-0"
+                      title="Toggle Fullscreen"
+                    >
+                      <Maximize2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  {/* Image Container with Zoom & Pan */}
+                  <div
+                    className="overflow-hidden cursor-move"
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    onWheel={handleWheel}
+                    style={{ 
+                      width: '100%', 
+                      height: '60vh',
+                      position: 'relative'
                     }}
-                  />
+                  >
+                    <div
+                      style={{
+                        transform: `translate(${panX}px, ${panY}px) scale(${zoomLevel})`,
+                        transformOrigin: 'center center',
+                        transition: isDragging ? 'none' : 'transform 0.1s',
+                        width: '100%',
+                        height: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <img
+                        key={selectedImageFile.id}
+                        src={imageUrl}
+                        alt={selectedImageFile.originalName}
+                        className="max-w-full max-h-full object-contain"
+                        draggable={false}
+                        onError={(e) => {
+                          if ((e.target as HTMLImageElement).src !== fallbackUrl) {
+                            (e.target as HTMLImageElement).src = fallbackUrl;
+                          } else if (thumbnailUrl) {
+                            (e.target as HTMLImageElement).src = thumbnailUrl;
+                          } else {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Zoom Level Indicator */}
+                  {zoomLevel !== 1 && (
+                    <div className="absolute bottom-2 left-2 bg-background/80 backdrop-blur-sm rounded px-2 py-1 text-xs">
+                      {Math.round(zoomLevel * 100)}%
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -1650,7 +2146,9 @@ const DatasetManager = () => {
             {selectedLabelFile && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-sm">Associated Label File: {selectedLabelFile.originalName}</CardTitle>
+                  <CardTitle className="text-sm">
+                    {selectedImageFile ? `Associated Label File: ${selectedLabelFile.originalName}` : `Label File: ${selectedLabelFile.originalName}`}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   {labelFileContent ? (
@@ -1663,8 +2161,46 @@ const DatasetManager = () => {
                 </CardContent>
               </Card>
             )}
+          </div>
 
-            {/* Actions */}
+          {/* Actions & Navigation */}
+          <div className="flex items-center justify-between gap-2 flex-shrink-0 pt-4 border-t">
+            <div className="flex items-center gap-2">
+              {/* Keyboard Navigation */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={navigateToPreviousFile}
+                disabled={(() => {
+                  if (navigableFiles.length === 0) return true;
+                  const currentFile = selectedImageFile || selectedLabelFile;
+                  if (!currentFile) return true;
+                  const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
+                  return currentIndex <= 0;
+                })()}
+                title="Previous (←)"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={navigateToNextFile}
+                disabled={(() => {
+                  if (navigableFiles.length === 0) return true;
+                  const currentFile = selectedImageFile || selectedLabelFile;
+                  if (!currentFile) return true;
+                  const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
+                  return currentIndex >= navigableFiles.length - 1;
+                })()}
+                title="Next (→)"
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+            
             <div className="flex items-center gap-2">
               {selectedImageFile && (
                 <Button
@@ -1673,10 +2209,7 @@ const DatasetManager = () => {
                   onClick={() => {
                     const datasetId = selectedVersionDatasetId || currentDatasetId;
                     if (datasetId) {
-                      // Try download endpoint, fallback to regular file endpoint
                       const downloadUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/download`);
-                      const fileUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
-                      // Try download first, if it fails the browser will handle it
                       window.open(downloadUrl, '_blank');
                     }
                   }}
@@ -1685,7 +2218,32 @@ const DatasetManager = () => {
                   Download
                 </Button>
               )}
+              {selectedLabelFile && !selectedImageFile && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const datasetId = selectedVersionDatasetId || currentDatasetId;
+                    if (datasetId) {
+                      const downloadUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedLabelFile.id)}/download`);
+                      window.open(downloadUrl, '_blank');
+                    }
+                  }}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download Label
+                </Button>
+              )}
             </div>
+          </div>
+          
+          {/* Keyboard Shortcuts Hint */}
+          <div className="text-xs text-muted-foreground text-center pt-2 border-t flex-shrink-0">
+            <span>← → Navigate</span>
+            <span className="mx-2">•</span>
+            <span>Ctrl+Scroll Zoom</span>
+            <span className="mx-2">•</span>
+            <span>ESC Close</span>
           </div>
         </DialogContent>
       </Dialog>

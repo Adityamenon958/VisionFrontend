@@ -113,7 +113,7 @@ export const AppHeader: React.FC = () => {
                   size="sm"
                   onClick={() => navigate("/dashboard?action=create-company")}
                 >
-                  Create Workspace
+                  Create Company
                 </Button>
                 <JoinCompanyDialog />
               </>

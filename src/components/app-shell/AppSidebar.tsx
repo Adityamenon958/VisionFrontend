@@ -244,16 +244,16 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                 {item.label === "Projects" && isProjectsExpanded && (
                   <div className="ml-6 mt-1 space-y-1">
                     <div className="relative">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="w-full justify-start"
-                        onClick={handleCreateProject}
-                        disabled={!companyId}
-                      >
-                        <Plus className="mr-2 h-4 w-4" />
-                        Create Project
-                      </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full justify-start"
+                      onClick={handleCreateProject}
+                      disabled={!companyId}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Create Project
+                    </Button>
                       {!companyId && (
                         <div
                           className="absolute inset-0 cursor-not-allowed"

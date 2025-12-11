@@ -177,9 +177,9 @@ const Dashboard = () => {
     
     if (action === "create-project") {
       if (profile?.company_id) {
-        setShowProjectDialog(true);
-        // Clear the action param from URL
-        setSearchParams({});
+      setShowProjectDialog(true);
+      // Clear the action param from URL
+      setSearchParams({});
       } else {
         // User tried to access create-project route without company
         toast({
@@ -942,7 +942,7 @@ const Dashboard = () => {
         <EmptyState
           icon={FolderKanban}
           title="Welcome to VisionM"
-          description="Get started by creating a workspace (company) to organize your projects and datasets."
+          description="Get started by creating a company to organize your projects and datasets."
           action={{
             label: "Create Workspace",
             onClick: () => {
