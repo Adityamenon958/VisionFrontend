@@ -23,6 +23,24 @@ import { Play, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
+import {
+  saveTrainingState,
+  loadTrainingState,
+  clearTrainingState,
+  FinalMetrics,
+  HyperparametersSnapshot,
+  ModelInfoSnapshot,
+} from "@/utils/trainingPersistence";
+
+type TrainedModelSummary = {
+  modelId: string;
+  modelVersion?: string;
+  modelType?: string;
+  status?: string;
+  metrics?: any;
+  insights?: any;
+  createdAt?: string;
+};
 
 interface SimulationViewProps {
   projects: any[];
@@ -57,8 +75,22 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
   // model selection states
   const [modelType, setModelType] = useState<"YOLO" | "EfficientNet" | "Custom">("YOLO");
-  const [baseModels, setBaseModels] = useState<Array<{ filename?: string; size: string; name?: string; sizeMB?: number; label?: string }>>([]);
-  const [selectedModelSize, setSelectedModelSize] = useState<string>(""); // 'n'|'s'|'m'|'l'|'x'
+  const [baseModels, setBaseModels] = useState<
+    Array<{
+      type?: "base" | "trained";
+      key?: string;
+      filename?: string;
+      size?: string;
+      name?: string;
+      sizeMB?: number;
+      label?: string;
+      modelId?: string;
+      modelVersion?: string;
+      modelType?: string;
+    }>
+  >([]);
+  // NOTE: this now stores the selected model key (for both base and trained models)
+  const [selectedModelSize, setSelectedModelSize] = useState<string>(""); // key for selected model
 
   // defaults and hyperparams
   const [defaultParams, setDefaultParams] = useState<any | null>(null);
@@ -81,12 +113,60 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     "idle" | "queued" | "running" | "completed" | "failed" | "cancelled"
   >("idle");
   const [simulationMetrics, setSimulationMetrics] = useState<any | null>(null);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [completedAt, setCompletedAt] = useState<string | null>(null);
+  const [epochInfo, setEpochInfo] = useState<{ current: number; total: number } | null>(null);
+  const [finalMetrics, setFinalMetrics] = useState<FinalMetrics | null>(null);
+  const [hyperparametersSnapshot, setHyperparametersSnapshot] = useState<HyperparametersSnapshot | null>(null);
+  const [modelInfo, setModelInfo] = useState<ModelInfoSnapshot | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [trainedModels, setTrainedModels] = useState<TrainedModelSummary[]>([]);
+  const [trainedModelsLoading, setTrainedModelsLoading] = useState(false);
+  const [trainedModelsError, setTrainedModelsError] = useState<string | null>(null);
+  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
 
   // refs
   const pollIntervalRef = useRef<number | null>(null);
   const logsAbortRef = useRef<AbortController | null>(null);
   const datasetDetailsAbortRef = useRef<AbortController | null>(null);
+  const isRestoringRef = useRef<boolean>(false);
+  const hasRestoredRef = useRef<boolean>(false);
+  const completionToastShownRef = useRef<boolean>(false);
+
+  const COMPLETION_TOAST_PREFIX = "visionm_training_completed_toast_";
+
+  const hasCompletionToastShown = (id: string) => {
+    try {
+      return localStorage.getItem(COMPLETION_TOAST_PREFIX + id) === "1";
+    } catch {
+      return false;
+    }
+  };
+
+  const markCompletionToastShown = (id: string) => {
+    try {
+      localStorage.setItem(COMPLETION_TOAST_PREFIX + id, "1");
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const showCompletionToast = (id: string, metrics: FinalMetrics | null | undefined) => {
+    if (completionToastShownRef.current) return;
+    if (hasCompletionToastShown(id)) return;
+
+    const bestEpoch = metrics?.bestEpoch;
+    toast({
+      title: "Training Completed Successfully",
+      description:
+        bestEpoch !== undefined
+          ? `Model training finished with best epoch ${bestEpoch}`
+          : "Model training finished successfully.",
+    });
+
+    completionToastShownRef.current = true;
+    markCompletionToastShown(id);
+  };
 
   // helper headers
   const getFetchHeaders = () => {
@@ -256,10 +336,28 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     }
   };
 
-  // --- fetch base models (YOLO) ---
+  // --- fetch base and trained models (YOLO) ---
   const fetchBaseModels = async () => {
     try {
-      const url = `${API_BASE}/train/base-models`;
+      // Try to include company and project context if available
+      const companyName =
+        (profile as any)?.companies?.name ??
+        (profile as any)?.company?.name ??
+        "";
+
+      const selectedProjectObj = projects.find(
+        (p) => String(p.id) === String(selectedProjectId) || String(p.name) === String(selectedProjectId)
+      );
+      const projectName = selectedProjectObj?.name ?? "";
+
+      const qs = new URLSearchParams();
+      if (companyName) qs.append("company", String(companyName));
+      if (projectName) qs.append("project", String(projectName));
+
+      const url =
+        qs.toString().length > 0
+          ? `${API_BASE}/train/base-models?${qs.toString()}`
+          : `${API_BASE}/train/base-models`;
       console.info("[fetchBaseModels] url:", url);
       const resp = await fetch(url, { headers: getFetchHeaders() });
 
@@ -277,19 +375,109 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       }
 
       const json = await resp.json();
-      const models = Array.isArray(json.models) && json.models.length > 0
-        ? json.models.map((m: any) => ({
-            size: m.size ?? m.sizeMB ?? m.filename ?? "",
-            name: m.name ?? m.filename ?? `model-${m.size ?? ""}`,
-            sizeMB: m.sizeMB,
-            filename: m.filename,
-            label: m.name ? `${m.name}${m.sizeMB ? ` (${m.sizeMB} MB)` : ""}` : (m.filename ?? "")
-          }))
-        : FALLBACK_YOLO_MODELS;
-      setBaseModels(models);
+
+      const baseModelsRaw: any[] = Array.isArray(json.baseModels) ? json.baseModels : [];
+      const trainedModelsRaw: any[] = Array.isArray(json.trainedModels) ? json.trainedModels : [];
+
+      const mappedBase = baseModelsRaw.map((m: any, idx: number) => {
+        const size = m.size ?? m.sizeMB ?? m.filename ?? "";
+        const key = `base-${size || idx}`;
+        const name = m.name ?? m.filename ?? `model-${size}`;
+        return {
+          type: "base" as const,
+          key,
+          size: size ? String(size) : undefined,
+          name,
+          sizeMB: m.sizeMB,
+          filename: m.filename,
+          label: name,
+        };
+      });
+
+      const mappedTrained = trainedModelsRaw.map((m: any, idx: number) => {
+        const key = `trained-${m.modelId ?? idx}`;
+        const name = m.name ?? `Model ${m.modelVersion ?? ""}`;
+        return {
+          type: "trained" as const,
+          key,
+          name,
+          modelId: m.modelId,
+          modelVersion: m.modelVersion,
+          modelType: m.modelType,
+          label: name,
+        };
+      });
+
+      const combined = [...mappedBase, ...mappedTrained];
+
+      if (combined.length === 0) {
+        // Fallback to static YOLO base models, mapped into the same shape
+        const fallback = FALLBACK_YOLO_MODELS.map((m, idx) => ({
+          type: "base" as const,
+          key: `fallback-${m.size}-${idx}`,
+          size: m.size,
+          name: m.label,
+          label: m.label,
+        }));
+        setBaseModels(fallback);
+      } else {
+        setBaseModels(combined);
+      }
     } catch (err) {
       console.error("fetchBaseModels error:", err);
-      setBaseModels(FALLBACK_YOLO_MODELS);
+      const fallback = FALLBACK_YOLO_MODELS.map((m, idx) => ({
+        type: "base" as const,
+        key: `fallback-${m.size}-${idx}`,
+        size: m.size,
+        name: m.label,
+        label: m.label,
+      }));
+      setBaseModels(fallback);
+    }
+  };
+
+  // --- fetch trained models for current company/project ---
+  const fetchTrainedModels = async () => {
+    try {
+      const companyName =
+        (profile as any)?.companies?.name ??
+        (profile as any)?.company?.name ??
+        "";
+
+      const selectedProjectObj = projects.find(
+        (p) => String(p.id) === String(selectedProjectId) || String(p.name) === String(selectedProjectId)
+      );
+      const projectName = selectedProjectObj?.name ?? "";
+
+      if (!companyName || !projectName) {
+        setTrainedModels([]);
+        return;
+      }
+
+      setTrainedModelsLoading(true);
+      setTrainedModelsError(null);
+
+      const qs = new URLSearchParams({
+        company: String(companyName),
+        project: String(projectName),
+      });
+      const url = `${API_BASE}/models?${qs.toString()}`;
+      console.info("[fetchTrainedModels] url:", url);
+
+      const resp = await fetch(url, { headers: getFetchHeaders() });
+      if (!resp.ok) {
+        throw new Error(`Failed to load trained models (${resp.status})`);
+      }
+
+      const json = await resp.json();
+      const models: TrainedModelSummary[] = Array.isArray(json.models) ? json.models : [];
+      setTrainedModels(models);
+    } catch (err: any) {
+      console.error("fetchTrainedModels error:", err);
+      setTrainedModels([]);
+      setTrainedModelsError(err?.message || "Failed to load trained models.");
+    } finally {
+      setTrainedModelsLoading(false);
     }
   };
 
@@ -335,28 +523,47 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
   // when project changes, load datasets
   useEffect(() => {
+    // Don't reset training state if training is active
+    const isTrainingActive = isSimulating || (jobId && ["queued", "running"].includes(simulationStatus));
+    
     setSelectedDatasetId("");
     setDatasetDetails(null);
     setSelectedModelSize("");
     setSimulationMetrics(null);
-    setSimulationStatus("idle");
-    setJobId(null);
-    setSimulationProgress(0);
+    
+    // Only reset training-related state if training is not active
+    if (!isTrainingActive) {
+      setSimulationStatus("idle");
+      setJobId(null);
+      setSimulationProgress(0);
+    }
+    
     if (selectedProjectId) {
       void fetchDatasets(selectedProjectId);
+      // Also refresh trained models when a valid project is selected
+      void fetchTrainedModels();
     } else {
       setDatasetList([]);
+      setTrainedModels([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId, sessionReady]);
 
   // when dataset changes, fetch details
   useEffect(() => {
+    // Don't reset training state if training is active
+    const isTrainingActive = isSimulating || (jobId && ["queued", "running"].includes(simulationStatus));
+    
     setSelectedModelSize("");
     setSimulationMetrics(null);
-    setSimulationStatus("idle");
-    setJobId(null);
-    setSimulationProgress(0);
+    
+    // Only reset training-related state if training is not active
+    if (!isTrainingActive) {
+      setSimulationStatus("idle");
+      setJobId(null);
+      setSimulationProgress(0);
+    }
+    
     if (selectedDatasetId) {
       void fetchDatasetDetails(selectedDatasetId);
     } else {
@@ -391,6 +598,146 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     }
   }, [useDefaults, defaultParams]);
 
+  // Restore training state from localStorage on mount
+  useEffect(() => {
+    if (!sessionReady || hasRestoredRef.current) return;
+
+    const restoreTrainingState = async () => {
+      const savedState = loadTrainingState();
+      if (!savedState || !savedState.jobId) {
+        hasRestoredRef.current = true;
+        return;
+      }
+
+      isRestoringRef.current = true;
+      console.log("[SimulationView] Restoring training state:", savedState.jobId);
+
+      try {
+        // Fetch current status from backend
+        const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(savedState.jobId)}/status`, {
+          headers: getFetchHeaders(),
+        });
+
+        if (!resp.ok) {
+          // Job not found or invalid - clear persisted state
+          if (resp.status === 404 || resp.status === 400) {
+            console.warn("[SimulationView] Saved job not found, clearing persisted state");
+            clearTrainingState();
+            hasRestoredRef.current = true;
+            isRestoringRef.current = false;
+            return;
+          }
+          throw new Error(`Status fetch failed (${resp.status})`);
+        }
+
+        const data = await resp.json();
+        const status = data.status ?? "idle";
+
+        // Restore UI state
+        setJobId(savedState.jobId);
+        setSimulationStatus(status);
+
+        const progressPercent =
+          data.progress?.progressPercent ??
+          (() => {
+            const cur = data.progress?.currentEpoch ?? 0;
+            const tot = data.progress?.totalEpochs ?? 0;
+            return tot ? Math.round((cur / tot) * 100) : 0;
+          })();
+        if (data.progress) {
+          setEpochInfo({
+            current: data.progress.currentEpoch ?? 0,
+            total: data.progress.totalEpochs ?? 0,
+          });
+        }
+        setSimulationProgress(progressPercent);
+        setSimulationMetrics(data.metrics ?? null);
+        if (data.startedAt) {
+          setStartedAt(data.startedAt);
+        }
+        if (data.completedAt) {
+          setCompletedAt(data.completedAt);
+        }
+
+        if (data.finalMetrics) {
+          setFinalMetrics(data.finalMetrics as FinalMetrics);
+        }
+        if (data.hyperparameters) {
+          setHyperparametersSnapshot(data.hyperparameters as HyperparametersSnapshot);
+        }
+        if (data.model) {
+          const model = data.model as { modelId?: string; modelVersion?: string; downloadUrl?: string };
+          setModelInfo({
+            modelId: model.modelId,
+            modelVersion: model.modelVersion,
+            downloadUrl: model.downloadUrl,
+          });
+        }
+
+        if (data.logsSummary && Array.isArray(data.logsSummary)) {
+          setLogs(data.logsSummary);
+        }
+
+        // Restore selections if available
+        if (savedState.projectId && !selectedProjectId) {
+          setSelectedProjectId(savedState.projectId);
+        }
+        if (savedState.datasetId && !selectedDatasetId) {
+          setSelectedDatasetId(savedState.datasetId);
+        }
+        if (savedState.modelType && !modelType) {
+          setModelType(savedState.modelType as "YOLO" | "EfficientNet" | "Custom");
+        }
+
+        // Persist latest snapshot for this job
+        saveTrainingState(savedState.jobId, {
+          projectId: savedState.projectId,
+          datasetId: savedState.datasetId,
+          modelType: data.modelType ?? savedState.modelType,
+          modelSize: data.modelSize ?? savedState.modelSize,
+          status,
+          startedAt: data.startedAt ?? savedState.startedAt ?? null,
+          completedAt: data.completedAt ?? savedState.completedAt ?? null,
+          finalMetrics: (data.finalMetrics as FinalMetrics) ?? null,
+          hyperparameters: (data.hyperparameters as HyperparametersSnapshot) ?? null,
+          modelInfo: data.model
+            ? {
+                modelId: data.model.modelId,
+                modelVersion: data.model.modelVersion,
+                downloadUrl: data.model.downloadUrl,
+              }
+            : savedState.modelInfo ?? null,
+        });
+
+        // Resume polling if training is still active
+        if (["queued", "running"].includes(status)) {
+          setIsSimulating(true);
+          startPollingJob(savedState.jobId);
+          console.log("[SimulationView] Resumed polling for active training");
+        } else if (status === "completed") {
+          // Completed: show results from snapshot, no polling, no clearing
+          setIsSimulating(false);
+          showCompletionToast(savedState.jobId, data.finalMetrics as FinalMetrics | null | undefined);
+        } else {
+          // Failed or cancelled - clear persisted state
+          clearTrainingState();
+          setIsSimulating(false);
+        }
+      } catch (err: any) {
+        console.error("[SimulationView] Error restoring training state:", err);
+        // On error, clear persisted state to avoid getting stuck
+        clearTrainingState();
+        setIsSimulating(false);
+      } finally {
+        isRestoringRef.current = false;
+        hasRestoredRef.current = true;
+      }
+    };
+
+    void restoreTrainingState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionReady]);
+
   // cleanup polling on unmount
   useEffect(() => {
     return () => {
@@ -420,16 +767,25 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       return;
     }
 
-    // Prepare payload
+    // Prepare payload based on selected model option
+    const selectedModel =
+      baseModels.find((m) => m.key === selectedModelSize) ||
+      baseModels.find((m) => (m.size || m.filename) === selectedModelSize);
+
     const payload: any = {
       datasetId: selectedDatasetId,
-      modelType,
       ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
     };
 
-    // Add modelSize only when YOLO and selected
-    if (modelType === "YOLO" && selectedModelSize) {
-      payload.modelSize = selectedModelSize; // backend expects modelSize (confirm with backend if different)
+    if (selectedModel && selectedModel.type === "trained" && selectedModel.modelId) {
+      // Continue/improve an existing trained model
+      payload.modelId = selectedModel.modelId;
+    } else {
+      // Start from a base model (or fallback to current modelType/size)
+      payload.modelType = (selectedModel?.modelType as string) || modelType;
+      if ((selectedModel?.size || selectedModelSize) && modelType === "YOLO") {
+        payload.modelSize = String(selectedModel?.size || selectedModelSize);
+      }
     }
 
     // Add hyperparameters only if user opted to customize
@@ -445,11 +801,20 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
     console.info("[startTraining] payload:", payload);
 
+    // Clear any existing persisted training state before starting new training
+    clearTrainingState();
+
     setShowSimulateConfirm(false);
     setIsSimulating(true);
     setSimulationStatus("queued");
     setSimulationProgress(0);
     setSimulationMetrics(null);
+    setStartedAt(null);
+    setCompletedAt(null);
+    setEpochInfo(null);
+    setFinalMetrics(null);
+    setHyperparametersSnapshot(null);
+    setModelInfo(null);
     setLogs([]);
 
     try {
@@ -478,6 +843,14 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
       setJobId(newJobId);
       setSimulationStatus(data.status ?? "queued");
+      
+      // Save training state to localStorage for persistence across reloads
+      saveTrainingState(newJobId, {
+        projectId: selectedProjectId,
+        datasetId: selectedDatasetId,
+        modelType,
+      });
+      
       startPollingJob(newJobId);
     } catch (err: any) {
       console.error("startTraining error:", err);
@@ -488,11 +861,14 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       });
       setIsSimulating(false);
       setSimulationStatus("failed");
+      // Ensure no stale persisted state remains after failed start
+      clearTrainingState();
     }
   };
 
   // --- poll job status every 3s ---
   const startPollingJob = (jobIdToPoll: string) => {
+    // Prevent duplicate polling
     if (pollIntervalRef.current) {
       window.clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -503,9 +879,29 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobIdToPoll)}/status`, {
           headers: getFetchHeaders(),
         });
-        if (!resp.ok) throw new Error(`Status fetch failed (${resp.status})`);
+        
+        if (!resp.ok) {
+          // If job not found or invalid, clear persisted state
+          if (resp.status === 404 || resp.status === 400) {
+            console.warn("[SimulationView] Job not found or invalid during polling, clearing persisted state");
+            clearTrainingState();
+            if (pollIntervalRef.current) {
+              window.clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setIsSimulating(false);
+            setJobId(null);
+            setSimulationStatus("idle");
+            setEpochInfo(null);
+            setStartedAt(null);
+            return;
+          }
+          throw new Error(`Status fetch failed (${resp.status})`);
+        }
+        
         const data = await resp.json();
-        setSimulationStatus(data.status ?? simulationStatus);
+        const status = data.status ?? simulationStatus;
+        setSimulationStatus(status);
 
         const progressPercent =
           data.progress?.progressPercent ??
@@ -514,22 +910,93 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
             const tot = data.progress?.totalEpochs ?? 0;
             return tot ? Math.round((cur / tot) * 100) : 0;
           })();
+        if (data.progress) {
+          setEpochInfo({
+            current: data.progress.currentEpoch ?? 0,
+            total: data.progress.totalEpochs ?? 0,
+          });
+        }
         setSimulationProgress(progressPercent);
         setSimulationMetrics(data.metrics ?? null);
+        if (data.startedAt) {
+          setStartedAt(data.startedAt);
+        }
+        if (data.completedAt) {
+          setCompletedAt(data.completedAt);
+        }
+
+        if (data.finalMetrics) {
+          setFinalMetrics(data.finalMetrics as FinalMetrics);
+        }
+        if (data.hyperparameters) {
+          setHyperparametersSnapshot(data.hyperparameters as HyperparametersSnapshot);
+        }
+        if (data.model) {
+          const model = data.model as { modelId?: string; modelVersion?: string; downloadUrl?: string };
+          setModelInfo({
+            modelId: model.modelId,
+            modelVersion: model.modelVersion,
+            downloadUrl: model.downloadUrl,
+          });
+        }
 
         if (data.logsSummary && Array.isArray(data.logsSummary)) {
           setLogs(data.logsSummary);
         }
 
-        if (["completed", "failed", "cancelled"].includes(data.status)) {
+        // Persist latest snapshot
+        saveTrainingState(jobIdToPoll, {
+          modelType: data.modelType,
+          modelSize: data.modelSize,
+          status,
+          startedAt: data.startedAt ?? null,
+          completedAt: data.completedAt ?? null,
+          finalMetrics: (data.finalMetrics as FinalMetrics) ?? null,
+          hyperparameters: (data.hyperparameters as HyperparametersSnapshot) ?? null,
+          modelInfo: data.model
+            ? {
+                modelId: data.model.modelId,
+                modelVersion: data.model.modelVersion,
+                downloadUrl: data.model.downloadUrl,
+              }
+            : undefined,
+        });
+
+        if (["completed", "failed", "cancelled"].includes(status)) {
           if (pollIntervalRef.current) {
             window.clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
           }
           setIsSimulating(false);
+          if (status === "completed") {
+            showCompletionToast(jobIdToPoll, data.finalMetrics as FinalMetrics | null | undefined);
+          } else {
+            // Clear persisted training state when training fails/cancels
+            clearTrainingState();
+            setEpochInfo(null);
+            setStartedAt(null);
+            setCompletedAt(null);
+            setFinalMetrics(null);
+            setHyperparametersSnapshot(null);
+            setModelInfo(null);
+          }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Polling status error:", err);
+        // If we get a 404 or 400, the job might be invalid - clear persisted state
+        if (err?.message?.includes("404") || err?.message?.includes("400")) {
+          console.warn("[SimulationView] Job not found or invalid, clearing persisted state");
+          clearTrainingState();
+          if (pollIntervalRef.current) {
+            window.clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsSimulating(false);
+          setJobId(null);
+          setSimulationStatus("idle");
+          setEpochInfo(null);
+          setStartedAt(null);
+        }
       }
     };
 
@@ -589,6 +1056,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         pollIntervalRef.current = null;
       }
       setIsSimulating(false);
+      // Clear persisted training state when cancelled
+      clearTrainingState();
     } catch (err: any) {
       console.error("cancelJob error:", err);
       toast({ title: "Cancel failed", description: err?.message ?? "Could not cancel job.", variant: "destructive" });
@@ -611,6 +1080,14 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       setSimulationStatus("queued");
       setIsSimulating(true);
       setSimulationProgress(0);
+      
+      // Save new training state to localStorage
+      saveTrainingState(newId, {
+        projectId: selectedProjectId,
+        datasetId: selectedDatasetId,
+        modelType,
+      });
+      
       startPollingJob(newId);
       toast({ title: "Retry started", description: `New job ${newId} started`, variant: "default" });
     } catch (err: any) {
@@ -726,41 +1203,299 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           </Card>
         )}
 
-        {/* Dataset Summary */}
+        {/* Dataset Summary + Trained Models */}
         {selectedDatasetId && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Dataset Summary</CardTitle>
-              <CardDescription>Metadata fetched from GET /api/dataset/:datasetId</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingDatasetDetails ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading dataset...
-                </div>
-              ) : datasetDetails ? (
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="text-sm text-muted-foreground">Version</div>
-                  <div className="font-medium">{datasetDetails.version}</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Dataset Summary</CardTitle>
+                <CardDescription>Metadata fetched from GET /api/dataset/:datasetId</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {loadingDatasetDetails ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading dataset...
+                  </div>
+                ) : datasetDetails ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="text-sm text-muted-foreground">Version</div>
+                    <div className="font-medium">{datasetDetails.version}</div>
 
-                  <div className="text-sm text-muted-foreground">Total Images</div>
-                  <div className="font-medium">{datasetDetails.totalImages}</div>
+                    <div className="text-sm text-muted-foreground">Total Images</div>
+                    <div className="font-medium">{datasetDetails.totalImages}</div>
 
-                  <div className="text-sm text-muted-foreground">Labeled</div>
-                  <div className="font-medium">{datasetDetails.labeledImages ?? datasetDetails.trainCount ?? 0}</div>
+                    <div className="text-sm text-muted-foreground">Labeled</div>
+                    <div className="font-medium">{datasetDetails.labeledImages ?? datasetDetails.trainCount ?? 0}</div>
 
-                  <div className="text-sm text-muted-foreground">Unlabeled</div>
-                  <div className="font-medium">{datasetDetails.unlabeledImages ?? 0}</div>
+                    <div className="text-sm text-muted-foreground">Unlabeled</div>
+                    <div className="font-medium">{datasetDetails.unlabeledImages ?? 0}</div>
 
-                  <div className="text-sm text-muted-foreground">Status</div>
-                  <div className="font-medium">{datasetDetails.status}</div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No dataset details available.</p>
-              )}
-            </CardContent>
-          </Card>
+                    <div className="text-sm text-muted-foreground">Status</div>
+                    <div className="font-medium">{datasetDetails.status}</div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No dataset details available.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Trained Models</CardTitle>
+                <CardDescription>Models trained for this project</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {trainedModelsLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading trained models...
+                  </div>
+                ) : trainedModelsError ? (
+                  <div className="text-sm text-red-500">{trainedModelsError}</div>
+                ) : trainedModels.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No trained models found for this project yet.</p>
+                ) : (
+                  <div className="space-y-2 text-sm">
+                    {trainedModels.map((model) => {
+                      const isExpanded = expandedModelId === model.modelId;
+                      const bestM = model.metrics?.mAP50;
+                      const displayName =
+                        `${model.modelType ?? "Model"} - ${model.modelVersion ?? ""}`.trim() +
+                        (bestM != null ? ` (mAP@0.5: ${(bestM * 100).toFixed(1)}%)` : "");
+                      return (
+                        <div
+                          key={model.modelId}
+                          className="border rounded p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() =>
+                            setExpandedModelId(isExpanded ? null : model.modelId)
+                          }
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="font-medium">{displayName}</div>
+                            {model.status && (
+                              <Badge
+                                variant={
+                                  model.status === "completed"
+                                    ? "default"
+                                    : model.status === "failed"
+                                    ? "destructive"
+                                    : "secondary"
+                                }
+                              >
+                                {model.status}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Version {model.modelVersion ?? "?"} •{" "}
+                            {model.createdAt
+                              ? new Date(model.createdAt).toLocaleString()
+                              : "Created time unknown"}
+                          </div>
+
+                          {isExpanded && (
+                            <div className="mt-3 space-y-3">
+                              {/* Key metrics */}
+                              {model.metrics && (
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                  {model.metrics.bestEpoch !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        Best Epoch
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {model.metrics.bestEpoch}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {model.metrics.bestLoss !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        Best Loss
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {model.metrics.bestLoss.toFixed(4)}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {model.metrics.precision !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        Precision
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {(model.metrics.precision * 100).toFixed(2)}%
+                                      </div>
+                                    </div>
+                                  )}
+                                  {model.metrics.recall !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        Recall
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {(model.metrics.recall * 100).toFixed(2)}%
+                                      </div>
+                                    </div>
+                                  )}
+                                  {model.metrics.mAP50 !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        mAP@0.5
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {(model.metrics.mAP50 * 100).toFixed(2)}%
+                                      </div>
+                                    </div>
+                                  )}
+                                  {model.metrics.mAP50_95 !== undefined && (
+                                    <div className="p-2 border rounded">
+                                      <div className="text-xs text-muted-foreground">
+                                        mAP@0.5–0.95
+                                      </div>
+                                      <div className="font-semibold text-sm">
+                                        {(model.metrics.mAP50_95 * 100).toFixed(2)}%
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Per-label stats */}
+                              {model.metrics?.perLabelStats &&
+                                Array.isArray(model.metrics.perLabelStats) &&
+                                model.metrics.perLabelStats.length > 0 && (
+                                  <div>
+                                    <div className="text-xs font-semibold mb-1">
+                                      Per-label Stats
+                                    </div>
+                                    <div className="border rounded overflow-hidden">
+                                      <div className="grid grid-cols-4 bg-muted text-xs font-medium px-2 py-1">
+                                        <div>Label</div>
+                                        <div>Precision</div>
+                                        <div>Recall</div>
+                                        <div>mAP@0.5</div>
+                                      </div>
+                                      {model.metrics.perLabelStats.map((s: any, idx: number) => (
+                                        <div
+                                          key={`${model.modelId}-label-${idx}`}
+                                          className="grid grid-cols-4 text-xs px-2 py-1 border-t"
+                                        >
+                                          <div>{s.label}</div>
+                                          <div>{(s.precision * 100).toFixed(1)}%</div>
+                                          <div>{(s.recall * 100).toFixed(1)}%</div>
+                                          <div>{(s.mAP50 * 100).toFixed(1)}%</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                              {/* Insights */}
+                              {model.insights && (
+                                <div className="space-y-2">
+                                  {(model.insights.bestAccuracy != null ||
+                                    model.insights.bestmAP != null) && (
+                                    <div className="grid grid-cols-2 gap-3 text-xs">
+                                      {model.insights.bestAccuracy != null && (
+                                        <div>
+                                          <div className="text-muted-foreground">
+                                            Best Accuracy
+                                          </div>
+                                          <div className="font-semibold">
+                                            {(model.insights.bestAccuracy * 100).toFixed(
+                                              2
+                                            )}
+                                            %
+                                          </div>
+                                        </div>
+                                      )}
+                                      {model.insights.bestmAP != null && (
+                                        <div>
+                                          <div className="text-muted-foreground">
+                                            Best mAP
+                                          </div>
+                                          <div className="font-semibold">
+                                            {(model.insights.bestmAP * 100).toFixed(2)}%
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {Array.isArray(model.insights.weakestLabels) &&
+                                    model.insights.weakestLabels.length > 0 && (
+                                      <div>
+                                        <div className="text-xs font-semibold">
+                                          Weakest Labels
+                                        </div>
+                                        <div className="flex flex-wrap gap-1 mt-1">
+                                          {model.insights.weakestLabels.map(
+                                            (lbl: string, idx: number) => (
+                                              <span
+                                                key={`${model.modelId}-weak-${idx}`}
+                                                className="px-2 py-0.5 rounded-full bg-muted text-xs"
+                                              >
+                                                {lbl}
+                                              </span>
+                                            )
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                  {Array.isArray(model.insights.classImbalanceWarnings) &&
+                                    model.insights.classImbalanceWarnings.length > 0 && (
+                                      <div>
+                                        <div className="text-xs font-semibold">
+                                          Class Imbalance Warnings
+                                        </div>
+                                        <ul className="list-disc list-inside text-xs mt-1">
+                                          {model.insights.classImbalanceWarnings.map(
+                                            (w: string, idx: number) => (
+                                              <li
+                                                key={`${model.modelId}-imb-${idx}`}
+                                              >
+                                                {w}
+                                              </li>
+                                            )
+                                          )}
+                                        </ul>
+                                      </div>
+                                    )}
+
+                                  {Array.isArray(model.insights.recommendations) &&
+                                    model.insights.recommendations.length > 0 && (
+                                      <div>
+                                        <div className="text-xs font-semibold">
+                                          Recommendations
+                                        </div>
+                                        <ul className="list-disc list-inside text-xs mt-1">
+                                          {model.insights.recommendations.map(
+                                            (r: string, idx: number) => (
+                                              <li
+                                                key={`${model.modelId}-rec-${idx}`}
+                                              >
+                                                {r}
+                                              </li>
+                                            )
+                                          )}
+                                        </ul>
+                                      </div>
+                                    )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* Model Type + Model Size + Hyperparameters */}
@@ -784,8 +1519,17 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
               {/* If YOLO -> show model-size dropdown */}
               {modelType === "YOLO" && (
                 <div className="mb-4">
-                  <Label>YOLO Base Model</Label>
-                  <Select value={selectedModelSize} onValueChange={setSelectedModelSize}>
+                  <Label>YOLO Base / Trained Model</Label>
+                  <Select
+                    value={selectedModelSize}
+                    onValueChange={setSelectedModelSize}
+                    onOpenChange={(open) => {
+                      // Always refetch models when the dropdown is opened so trained models stay in sync
+                      if (open && modelType === "YOLO") {
+                        void fetchBaseModels();
+                      }
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder={baseModels.length ? "Select YOLO model" : "Loading models..."} />
                     </SelectTrigger>
@@ -796,11 +1540,11 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                         </SelectItem>
                       ) : (
                         baseModels.map((m, i) => {
-                          const val = m.size ?? (m.filename ? String(m.filename) : `m-${i}`);
+                          const val = m.key ?? m.size ?? (m.filename ? String(m.filename) : `m-${i}`);
                           const label = m.label ?? m.name ?? String(m.filename ?? val);
                           return (
                             <SelectItem key={String(val) + "-" + i} value={String(val)}>
-                              {label}
+                              {m.type === "trained" ? `Trained: ${label}` : label}
                             </SelectItem>
                           );
                         })
@@ -916,11 +1660,182 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
               <CardDescription>Job ID: {jobId} — Status: {simulationStatus}</CardDescription>
             </CardHeader>
             <CardContent>
+              {/* metadata */}
+              <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+                {startedAt && (
+                  <div>
+                    <div className="text-muted-foreground">Started</div>
+                    <div className="font-medium">{new Date(startedAt).toLocaleString()}</div>
+                  </div>
+                )}
+                {completedAt && (
+                  <div>
+                    <div className="text-muted-foreground">Completed</div>
+                    <div className="font-medium">{new Date(completedAt).toLocaleString()}</div>
+                  </div>
+                )}
+                {epochInfo && (
+                  <div>
+                    <div className="text-muted-foreground">Epoch</div>
+                    <div className="font-medium">
+                      {epochInfo.current}/{epochInfo.total || "?"}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <Progress value={simulationProgress} />
               <div className="flex items-center justify-between text-sm mt-2">
                 <span className="text-muted-foreground">Progress</span>
                 <span className="font-medium">{simulationProgress}%</span>
               </div>
+
+              {/* Training results summary (only after completion) */}
+              {simulationStatus === "completed" && (
+                <div className="mt-4 space-y-4">
+                  {/* Overview */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2">Training Overview</h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <div className="text-muted-foreground">Model Type</div>
+                        <div className="font-medium">{modelType}</div>
+                      </div>
+                      {selectedModelSize && (
+                        <div>
+                          <div className="text-muted-foreground">Model Size</div>
+                          <div className="font-medium">{selectedModelSize}</div>
+                        </div>
+                      )}
+                      {selectedDatasetId && (
+                        <div>
+                          <div className="text-muted-foreground">Dataset ID</div>
+                          <div className="font-medium">{selectedDatasetId}</div>
+                        </div>
+                      )}
+                      {hyperparametersSnapshot?.epochs !== undefined && (
+                        <div>
+                          <div className="text-muted-foreground">Total Epochs</div>
+                          <div className="font-medium">{hyperparametersSnapshot.epochs}</div>
+                        </div>
+                      )}
+                      {hyperparametersSnapshot?.batchSize !== undefined && (
+                        <div>
+                          <div className="text-muted-foreground">Batch Size</div>
+                          <div className="font-medium">{hyperparametersSnapshot.batchSize}</div>
+                        </div>
+                      )}
+                      {hyperparametersSnapshot?.imgSize !== undefined && (
+                        <div>
+                          <div className="text-muted-foreground">Image Size</div>
+                          <div className="font-medium">{hyperparametersSnapshot.imgSize}</div>
+                        </div>
+                      )}
+                      {hyperparametersSnapshot?.learningRate !== undefined && (
+                        <div>
+                          <div className="text-muted-foreground">Learning Rate</div>
+                          <div className="font-medium">{hyperparametersSnapshot.learningRate}</div>
+                        </div>
+                      )}
+                      {hyperparametersSnapshot?.workers !== undefined && (
+                        <div>
+                          <div className="text-muted-foreground">Workers</div>
+                          <div className="font-medium">{hyperparametersSnapshot.workers}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Final metrics */}
+                  {finalMetrics && (
+                    <div>
+                      <h4 className="text-sm font-semibold mb-2">Final Metrics</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                        {finalMetrics.bestEpoch !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">Best Epoch</div>
+                            <div className="font-semibold mt-1">{finalMetrics.bestEpoch}</div>
+                          </div>
+                        )}
+                        {finalMetrics.bestLoss !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">Best Loss</div>
+                            <div className="font-semibold mt-1">
+                              {finalMetrics.bestLoss.toFixed(4)}
+                            </div>
+                          </div>
+                        )}
+                        {finalMetrics.precision !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">Precision</div>
+                            <div className="font-semibold mt-1">
+                              {(finalMetrics.precision * 100).toFixed(2)}%
+                            </div>
+                          </div>
+                        )}
+                        {finalMetrics.recall !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">Recall</div>
+                            <div className="font-semibold mt-1">
+                              {(finalMetrics.recall * 100).toFixed(2)}%
+                            </div>
+                          </div>
+                        )}
+                        {finalMetrics.mAP50 !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">mAP@0.5</div>
+                            <div className="font-semibold mt-1">
+                              {(finalMetrics.mAP50 * 100).toFixed(2)}%
+                            </div>
+                          </div>
+                        )}
+                        {finalMetrics.mAP50_95 !== undefined && (
+                          <div className="p-3 border rounded">
+                            <div className="text-muted-foreground">mAP@0.5–0.95</div>
+                            <div className="font-semibold mt-1">
+                              {(finalMetrics.mAP50_95 * 100).toFixed(2)}%
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Model information */}
+                  {modelInfo && (
+                    <div>
+                      <h4 className="text-sm font-semibold mb-2">Model Information</h4>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        {modelInfo.modelId && (
+                          <div>
+                            <div className="text-muted-foreground">Model ID</div>
+                            <div className="font-medium">{modelInfo.modelId}</div>
+                          </div>
+                        )}
+                        {modelInfo.modelVersion && (
+                          <div>
+                            <div className="text-muted-foreground">Version</div>
+                            <div className="font-medium">{modelInfo.modelVersion}</div>
+                          </div>
+                        )}
+                        {modelInfo.downloadUrl && (
+                          <div>
+                            <div className="text-muted-foreground">Download</div>
+                            <a
+                              href={modelInfo.downloadUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary underline text-xs"
+                            >
+                              Download model
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* metrics */}
               {simulationMetrics && (
@@ -935,6 +1850,12 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                     <div className="p-3 border rounded">
                       <div className="text-sm text-muted-foreground">mAP@0.5</div>
                       <div className="font-semibold mt-1">{simulationMetrics.mAP50}</div>
+                    </div>
+                  )}
+                  {simulationMetrics.currentLR !== undefined && (
+                    <div className="p-3 border rounded">
+                      <div className="text-sm text-muted-foreground">Learning Rate</div>
+                      <div className="font-semibold mt-1">{simulationMetrics.currentLR}</div>
                     </div>
                   )}
                 </div>

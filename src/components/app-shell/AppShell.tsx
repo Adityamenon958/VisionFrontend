@@ -43,6 +43,22 @@ const AppShellContent = () => {
   // Restore route after session is ready and user is authenticated
   useRoutePersistence(sessionReady, user);
 
+  // Handle visibility changes to prevent unnecessary refreshes
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // Only log, don't trigger any refreshes or reloads
+      if (document.visibilityState === 'visible') {
+        // Tab became visible - but don't do anything that could cause refresh
+        // The app should continue normally without any forced reloads
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   // This component only renders when sessionReady && user (gated by ProtectedRoutes)
   // So we can safely render the UI here
   return (

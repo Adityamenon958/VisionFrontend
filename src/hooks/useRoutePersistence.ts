@@ -13,6 +13,8 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
   const navigate = useNavigate();
   const hasRestored = useRef(false);
   const initialRoute = useRef<string | null>(null);
+  const lastNavigationTime = useRef<number>(0);
+  const isNavigatingRef = useRef(false);
 
   // Capture initial route on mount (before any saves happen)
   useEffect(() => {
@@ -68,6 +70,12 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
         return;
       }
       
+      // Early exit if routes already match - prevents unnecessary navigation
+      if (savedRoute === currentRoute) {
+        hasRestored.current = true;
+        return;
+      }
+      
       // Always restore if we have a saved route that's different from current
       // This handles the case where user refreshes on a sub-route
       if (savedRoute !== currentRoute) {
@@ -108,8 +116,36 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
           // 2. Current route is not valid (might have been redirected)
           // 3. Saved route is different from current (user was on different route)
           if (isDefaultRoute || !isCurrentRouteValid || savedRoute !== currentRoute) {
+            // Double-check route equality to prevent loops
+            const normalizedSaved = savedRoute.split('?')[0];
+            const normalizedCurrent = currentRoute.split('?')[0];
+            if (normalizedSaved === normalizedCurrent) {
+              // Routes are the same (only query params differ) - no navigation needed
+              hasRestored.current = true;
+              return;
+            }
+            
+            // Debounce navigation to prevent rapid navigations (increased from 1s to 2s)
+            const now = Date.now();
+            if (now - lastNavigationTime.current < 2000 || isNavigatingRef.current) {
+              // Skip if navigation happened recently or is in progress
+              hasRestored.current = true;
+              return;
+            }
+            
+            lastNavigationTime.current = now;
+            isNavigatingRef.current = true;
             hasRestored.current = true;
-            navigate(savedRoute, { replace: true });
+            
+            // Use setTimeout to ensure navigation happens after current render cycle
+            setTimeout(() => {
+              // Final check before navigation to prevent loops
+              const finalCurrentRoute = location.pathname + location.search;
+              if (finalCurrentRoute !== savedRoute) {
+                navigate(savedRoute, { replace: true });
+              }
+              isNavigatingRef.current = false;
+            }, 0);
           } else {
             // Already on the correct route
             hasRestored.current = true;

@@ -1,5 +1,5 @@
 // src/contexts/ProfileContext.tsx
-import React, { useState, useCallback, useEffect, type ReactNode } from "react";
+import React, { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isUserAdmin } from "@/lib/utils/adminUtils";
 import { ProfileContext, type ProfileContextType } from "./profile-context";
@@ -17,6 +17,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
   const [user, setUser] = useState<any | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reloadProfileInProgress = useRef(false);
 
   const loadProfile = useCallback(
     async (session: any) => {
@@ -282,11 +283,50 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     sessionReady,
     error,
     reloadProfile: async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session) {
-        await loadProfile(session);
+      // Prevent concurrent calls to avoid race conditions
+      if (reloadProfileInProgress.current) {
+        if (isDev) {
+          console.log("[ProfileContext] reloadProfile already in progress, skipping");
+        }
+        return;
+      }
+
+      try {
+        reloadProfileInProgress.current = true;
+
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        // Handle errors from getSession()
+        if (sessionError) {
+          console.error("[ProfileContext] Error getting session in reloadProfile:", sessionError);
+          setError(sessionError.message || "Failed to get session");
+          return;
+        }
+
+        // If no session, silently return (existing behavior)
+        if (!session) {
+          if (isDev) {
+            console.log("[ProfileContext] No session available for reloadProfile");
+          }
+          return;
+        }
+
+        // Load profile with error handling
+        try {
+          await loadProfile(session);
+        } catch (profileError: any) {
+          console.error("[ProfileContext] Error loading profile in reloadProfile:", profileError);
+          setError(profileError?.message || "Failed to reload profile");
+          // Don't rethrow - let the function complete gracefully
+        }
+      } catch (err: any) {
+        console.error("[ProfileContext] Unexpected error in reloadProfile:", err);
+        setError(err?.message || "Failed to reload profile");
+      } finally {
+        reloadProfileInProgress.current = false;
       }
     },
   };
