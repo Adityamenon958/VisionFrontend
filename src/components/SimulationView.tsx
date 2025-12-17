@@ -126,6 +126,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const [trainedModelsLoading, setTrainedModelsLoading] = useState(false);
   const [trainedModelsError, setTrainedModelsError] = useState<string | null>(null);
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
+  const [modelToDelete, setModelToDelete] = useState<TrainedModelSummary | null>(null);
+  const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
+  const [showDeleteModelDialog, setShowDeleteModelDialog] = useState(false);
 
   // refs
   const pollIntervalRef = useRef<number | null>(null);
@@ -179,6 +182,60 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       headers["Authorization"] = `Bearer ${profile.access_token}`;
     }
     return headers;
+  };
+
+  // Delete a trained model by modelId using DELETE /api/models/:modelId
+  const handleDeleteModel = async () => {
+    if (!modelToDelete) return;
+    const modelId = modelToDelete.modelId;
+
+    setDeletingModelId(modelId);
+    try {
+      const url = `${API_BASE}/models/${encodeURIComponent(modelId)}`;
+      const resp = await fetch(url, {
+        method: "DELETE",
+        headers: getFetchHeaders(),
+      });
+
+      if (!resp.ok) {
+        let message = "Failed to delete model.";
+        try {
+          const body = await resp.json();
+          if (body?.error) {
+            message = body.error;
+          } else if (resp.status === 404) {
+            message = "Model not found. It may have already been deleted.";
+          }
+        } catch {
+          if (resp.status === 404) {
+            message = "Model not found. It may have already been deleted.";
+          }
+        }
+        throw new Error(message);
+      }
+
+      // Remove model from local state so UI updates
+      setTrainedModels((prev) => prev.filter((m) => m.modelId !== modelId));
+      if (expandedModelId === modelId) {
+        setExpandedModelId(null);
+      }
+
+      toast({
+        title: "Model deleted",
+        description: "Model and files deleted successfully.",
+      });
+    } catch (err: any) {
+      console.error("[SimulationView] delete model error:", err);
+      toast({
+        title: "Delete failed",
+        description: err?.message || "Could not delete this model.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingModelId(null);
+      setModelToDelete(null);
+      setShowDeleteModelDialog(false);
+    }
   };
 
   // --- fetch list of ready datasets for selected project ---
@@ -1256,6 +1313,43 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           </Card>
         )}
 
+        {/* Delete trained model confirmation dialog */}
+        <Dialog open={showDeleteModelDialog} onOpenChange={setShowDeleteModelDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete trained model?</DialogTitle>
+              <DialogDescription>
+                This will permanently delete the trained model and its files. Training and
+                inference jobs that used this model will remain in history, but this model
+                will no longer be available for new training or inference.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowDeleteModelDialog(false)}
+                disabled={!!deletingModelId}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteModel}
+                disabled={!!deletingModelId}
+              >
+                {deletingModelId ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete Model"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Dataset Summary + Trained Models */}
         {selectedDatasetId && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1319,32 +1413,58 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                       return (
                         <div
                           key={model.modelId}
-                          className="border rounded p-3 cursor-pointer hover:bg-muted/50 transition-colors"
-                          onClick={() =>
-                            setExpandedModelId(isExpanded ? null : model.modelId)
-                          }
+                          className="border rounded p-3 hover:bg-muted/50 transition-colors"
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="font-medium">{displayName}</div>
-                            {model.status && (
-                              <Badge
-                                variant={
-                                  model.status === "completed"
-                                    ? "default"
-                                    : model.status === "failed"
-                                    ? "destructive"
-                                    : "secondary"
-                                }
-                              >
-                                {model.status}
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-1">
-                            Version {model.modelVersion ?? "?"} •{" "}
-                            {model.createdAt
-                              ? new Date(model.createdAt).toLocaleString()
-                              : "Created time unknown"}
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              className="flex-1 text-left"
+                              onClick={() =>
+                                setExpandedModelId(isExpanded ? null : model.modelId)
+                              }
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="font-medium">{displayName}</div>
+                                {model.status && (
+                                  <Badge
+                                    variant={
+                                      model.status === "completed"
+                                        ? "default"
+                                        : model.status === "failed"
+                                        ? "destructive"
+                                        : "secondary"
+                                    }
+                                  >
+                                    {model.status}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                Version {model.modelVersion ?? "?"} •{" "}
+                                {model.createdAt
+                                  ? new Date(model.createdAt).toLocaleString()
+                                  : "Created time unknown"}
+                              </div>
+                            </button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => {
+                                setModelToDelete(model);
+                                setShowDeleteModelDialog(true);
+                              }}
+                              disabled={deletingModelId === model.modelId}
+                            >
+                              {deletingModelId === model.modelId ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Deleting...
+                                </>
+                              ) : (
+                                "Delete"
+                              )}
+                            </Button>
                           </div>
 
                           {isExpanded && (

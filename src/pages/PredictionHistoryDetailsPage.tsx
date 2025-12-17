@@ -241,3 +241,4 @@ const PredictionHistoryDetailsPage = () => {
 
 export default PredictionHistoryDetailsPage;
 
+
