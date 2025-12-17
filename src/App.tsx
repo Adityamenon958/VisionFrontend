@@ -25,6 +25,7 @@ import { AccountProfilePage } from "@/pages/AccountProfilePage";
 import { AccountSecurityPage } from "@/pages/AccountSecurityPage";
 import { AccountPreferencesPage } from "@/pages/AccountPreferencesPage";
 import PredictionPage from "@/pages/PredictionPage";
+import PredictionHistoryDetailsPage from "@/pages/PredictionHistoryDetailsPage";
 
 // Protected routes component - gates routes behind authentication
 const ProtectedRoutes = () => {
@@ -65,6 +66,7 @@ const ProtectedRoutes = () => {
         
         {/* Prediction */}
         <Route path="/project/prediction" element={<PredictionPage />} />
+        <Route path="/project/prediction/history/:inferenceId" element={<PredictionHistoryDetailsPage />} />
         
         {/* Team */}
         <Route path="/dashboard/team" element={<TeamMembersPage />} />

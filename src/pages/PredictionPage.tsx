@@ -1,5 +1,6 @@
 // src/pages/PredictionPage.tsx
 import { useEffect, useState, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/pages/PageHeader";
@@ -196,6 +197,8 @@ const PredictionPage = () => {
   // Refs
   const pollIntervalRef = useRef<number | null>(null);
   const projectIdRef = useRef<string | null>(null);
+
+  const navigate = useNavigate();
 
   // Auth header helper
   const getAuthHeaders = async () => {
@@ -780,22 +783,10 @@ const PredictionPage = () => {
     }
   }, [viewMode, sessionReady, companyName, projectName, selectedProjectId, historyStatusFilter, fetchPastInferences]);
 
-  // Load results for a selected past inference
-  const loadPastInferenceResults = async (inferenceId: string) => {
+  // View results for a past inference (navigate to dedicated details page)
+  const loadPastInferenceResults = (inferenceId: string) => {
     setSelectedPastInferenceId(inferenceId);
-    setInferenceId(inferenceId);
-    setInferenceStatus("completed");
-    
-    // Fetch results
-    await fetchResults(inferenceId);
-    
-    // Switch to new view to show results
-    setViewMode("new");
-    
-    // Scroll to results section
-    setTimeout(() => {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-    }, 100);
+    navigate(`/project/prediction/history/${encodeURIComponent(inferenceId)}`);
   };
 
   // Fetch results
@@ -1482,35 +1473,6 @@ const PredictionPage = () => {
                   </CardContent>
                 </Card>
               )}
-
-              {/* Start New Inference Button */}
-              <Card>
-                <CardContent className="py-6">
-                  <div className="flex flex-col items-center justify-center space-y-4">
-                    <p className="text-sm text-muted-foreground text-center">
-                      Inference completed successfully. You can start a new inference with the same or different settings.
-                    </p>
-                    <Button
-                      onClick={() => {
-                        setInferenceId(null);
-                        setInferenceStatus("idle");
-                        setInferenceProgress(0);
-                        setProcessedImages(0);
-                        setTotalImages(0);
-                        setResults(null);
-                        clearStorage();
-                        // Scroll to top to show configuration section
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                      }}
-                      variant="outline"
-                      className="w-full sm:w-auto"
-                    >
-                      <Play className="mr-2 h-4 w-4" />
-                      Start New Inference
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
             </>
           ) : (
             <Card>
