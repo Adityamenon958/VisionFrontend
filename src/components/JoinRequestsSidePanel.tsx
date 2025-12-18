@@ -157,27 +157,21 @@ export const JoinRequestsSidePanel: React.FC<JoinRequestsSidePanelProps> = ({
 
     setActionLoading(requestId);
     try {
-      // 1. Update request status to ignored (hidden from list)
-      const { error: updateError } = await supabase
-        .from("workspace_join_requests")
-        .update({ status: "ignored" })
-        .eq("id", requestId);
+      // Use Edge Function to reject request and send email (bypasses RLS)
+      const { data, error } = await supabase.functions.invoke("reject-workspace-request", {
+        body: { token: request.token },
+      });
 
-      if (updateError) throw updateError;
-
-      // 2. Send rejection email (optional - can be done via edge function)
-      try {
-        await supabase.functions.invoke("send-rejection-email", {
-          body: { requestId, userId: request.user_id },
-        });
-      } catch (emailError) {
-        console.error("Error sending rejection email:", emailError);
-        // Don't fail the whole operation if email fails
+      if (error) {
+        console.error("[JoinRequestsSidePanel] Rejection error:", error);
+        throw error;
       }
+
+      console.log("[JoinRequestsSidePanel] Request rejected successfully:", data);
 
       toast({
         title: "Request rejected",
-        description: "The join request has been rejected.",
+        description: "The join request has been rejected and the user has been notified.",
       });
 
       // Refresh requests list

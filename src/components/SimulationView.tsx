@@ -19,11 +19,18 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Play, Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Play, Loader2, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   saveTrainingState,
   loadTrainingState,
@@ -1728,95 +1735,188 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
               )}
 
               {/* Defaults card */}
-              <div className="mb-4 p-3 border rounded">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">Default Training Parameters</div>
-                    <div className="text-xs text-muted-foreground">These are fetched from the backend for the selected model type.</div>
+              <TooltipProvider>
+                <div className="mb-4 p-3 border rounded">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="font-medium">Default Training Parameters</div>
+                      <div className="text-xs text-muted-foreground">
+                        These are fetched from the backend for the selected model type.
+                      </div>
+                    </div>
+                    <div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={useDefaults}
+                          onChange={(e) => setUseDefaults(e.target.checked)}
+                        />
+                        <span>Use defaults</span>
+                      </label>
+                    </div>
                   </div>
-                  <div>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={useDefaults}
-                        onChange={(e) => setUseDefaults(e.target.checked)}
-                      />
-                      <span className="text-sm">Use defaults</span>
-                    </label>
-                  </div>
-                </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                  <div>Epochs</div>
-                  <div className="font-medium">{defaultParams?.epochs ?? 100}</div>
-                  <div>Batch Size</div>
-                  <div className="font-medium">{defaultParams?.batchSize ?? 16}</div>
-                  <div>Image Size</div>
-                  <div className="font-medium">{defaultParams?.imgSize ?? 640}</div>
-                  <div>Learning Rate</div>
-                  <div className="font-medium">{defaultParams?.learningRate ?? 0.01}</div>
-                  <div>Workers</div>
-                  <div className="font-medium">{defaultParams?.workers ?? 4}</div>
+                  <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                    {/* Epochs */}
+                    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span>Epochs</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start">
+                            <p className="max-w-xs text-xs">
+                              Number of full passes the model makes over the training dataset.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {defaultParams?.epochs ?? 100}
+                      </div>
+                    </div>
+
+                    {/* Batch Size */}
+                    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span>Batch Size</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start">
+                            <p className="max-w-xs text-xs">
+                              Number of images processed together in one training step.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {defaultParams?.batchSize ?? 16}
+                      </div>
+                    </div>
+
+                    {/* Image Size */}
+                    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span>Image Size</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start">
+                            <p className="max-w-xs text-xs">
+                              Resolution (in pixels) that all images are resized to before training.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {defaultParams?.imgSize ?? 640}
+                      </div>
+                    </div>
+
+                    {/* Learning Rate */}
+                    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span>Learning Rate</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start">
+                            <p className="max-w-xs text-xs">
+                              How aggressively the model updates its weights during training.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {defaultParams?.learningRate ?? 0.01}
+                      </div>
+                    </div>
+
+                    {/* Workers */}
+                    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span>Workers</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start">
+                            <p className="max-w-xs text-xs">
+                              Number of parallel workers used for loading and preprocessing data.
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {defaultParams?.workers ?? 4}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </TooltipProvider>
 
               {/* Customization form (visible when useDefaults === false) */}
               {!useDefaults && (
-                <div className="mt-2 grid grid-cols-2 gap-4 max-w-md">
+                <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 max-w-3xl">
                   <div>
-                    <Label>Epochs</Label>
-                    <input
+                    <Label className="text-sm font-medium">Epochs</Label>
+                    <Input
                       type="number"
                       value={epochs}
                       min={1}
                       max={1000}
                       onChange={(e) => setEpochs(Number(e.target.value))}
-                      className="w-32 input"
+                      className="mt-1 w-full"
                     />
                   </div>
                   <div>
-                    <Label>Batch Size</Label>
-                    <input
+                    <Label className="text-sm font-medium">Batch Size</Label>
+                    <Input
                       type="number"
                       value={batchSize}
                       min={1}
                       max={512}
                       onChange={(e) => setBatchSize(Number(e.target.value))}
-                      className="w-32 input"
+                      className="mt-1 w-full"
                     />
                   </div>
                   <div>
-                    <Label>Image Size</Label>
-                    <input
+                    <Label className="text-sm font-medium">Image Size</Label>
+                    <Input
                       type="number"
                       value={imgSize}
                       min={128}
                       max={2048}
                       onChange={(e) => setImgSize(Number(e.target.value))}
-                      className="w-32 input"
+                      className="mt-1 w-full"
                     />
                   </div>
                   <div>
-                    <Label>Learning Rate</Label>
-                    <input
+                    <Label className="text-sm font-medium">Learning Rate</Label>
+                    <Input
                       type="number"
                       value={learningRate}
                       step={0.0001}
                       min={0.000001}
                       max={1}
                       onChange={(e) => setLearningRate(Number(e.target.value))}
-                      className="w-32 input"
+                      className="mt-1 w-full"
                     />
                   </div>
                   <div>
-                    <Label>Workers</Label>
-                    <input
+                    <Label className="text-sm font-medium">Workers</Label>
+                    <Input
                       type="number"
                       value={workers}
                       min={1}
                       max={64}
                       onChange={(e) => setWorkers(Number(e.target.value))}
-                      className="w-32 input"
+                      className="mt-1 w-full"
                     />
                   </div>
                 </div>

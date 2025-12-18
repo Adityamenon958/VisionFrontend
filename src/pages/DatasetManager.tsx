@@ -29,9 +29,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { List, X, Download, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown } from "lucide-react";
+import { List, X, Download, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown, Trash2, Loader2 } from "lucide-react";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 import { cn } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim();
 const apiUrl = (path: string) => {
@@ -181,7 +191,28 @@ const DatasetManager = () => {
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
+  // Delete project state
+  const [showDeleteProjectDialog, setShowDeleteProjectDialog] = useState<boolean>(false);
+  const [deletingProject, setDeletingProject] = useState<boolean>(false);
 
+  // Delete version state
+  const [versionToDelete, setVersionToDelete] = useState<string | null>(null);
+  const [showDeleteVersionDialog, setShowDeleteVersionDialog] = useState<boolean>(false);
+  const [deletingVersion, setDeletingVersion] = useState<boolean>(false);
+  const [versionDependencies, setVersionDependencies] = useState<{
+    hasDependencies: boolean;
+    dependencies: {
+      trainingJobs: Array<{ jobId: string; status: string; createdAt: string }>;
+      models: Array<{ modelId: string; modelVersion: string; modelType: string; createdAt: string }>;
+      inferenceJobs: Array<any>;
+    };
+    counts: {
+      trainingJobs: number;
+      models: number;
+      inferenceJobs: number;
+    };
+  } | null>(null);
+  const [loadingDependencies, setLoadingDependencies] = useState<boolean>(false);
 
   // ------- Auth header helper -------
   const getAuthHeaders = async () => {
@@ -1325,6 +1356,190 @@ const DatasetManager = () => {
     }
   };
 
+  // ------- Delete project handler -------
+  const handleDeleteProject = async () => {
+    if (!projectId) {
+      toast({
+        title: "Error",
+        description: "Project ID is missing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDeletingProject(true);
+
+    try {
+      // Step 1: Delete from Supabase
+      const { error: supabaseError } = await supabase
+        .from("projects")
+        .delete()
+        .eq("id", projectId);
+
+      if (supabaseError) {
+        throw new Error(`Failed to delete project from database: ${supabaseError.message}`);
+      }
+
+      // Step 2: Send API request to backend to delete project
+      try {
+        const headers = await getAuthHeaders();
+        const deleteUrl = apiUrl(`/project/${encodeURIComponent(projectId)}`);
+        const res = await fetch(deleteUrl, {
+          method: "DELETE",
+          headers: headers ? { ...headers, "Content-Type": "application/json" } : { "Content-Type": "application/json" },
+        });
+
+        if (!res.ok) {
+          // Non-fatal error - Supabase deletion succeeded, but backend may still have data
+          console.warn(`Backend deletion failed (${res.status}), but project removed from database`);
+          // Continue with success flow since Supabase deletion succeeded
+        }
+      } catch (backendError: any) {
+        // Non-fatal error - log but continue
+        console.warn("Backend deletion failed:", backendError);
+        // Continue with success flow since Supabase deletion succeeded
+      }
+
+      // Success - navigate to dashboard
+      toast({
+        title: "Project deleted",
+        description: "The project has been successfully deleted.",
+      });
+
+      setShowDeleteProjectDialog(false);
+      navigate("/dashboard");
+    } catch (error: any) {
+      console.error("Error deleting project:", error);
+      toast({
+        title: "Failed to delete project",
+        description: error.message || "An unexpected error occurred while deleting the project.",
+        variant: "destructive",
+      });
+      // Keep dialog open on error so user can try again
+    } finally {
+      setDeletingProject(false);
+    }
+  };
+
+  // ------- Fetch version dependencies before deletion -------
+  const fetchVersionDependencies = async (datasetId: string) => {
+    setLoadingDependencies(true);
+    try {
+      const headers = await getAuthHeaders();
+      const depsUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/dependencies`);
+      const res = await fetch(depsUrl, {
+        method: "GET",
+        headers: headers || {},
+      });
+
+      if (!res.ok) {
+        // If dependencies endpoint fails, still allow deletion (maybe old API)
+        console.warn("Failed to fetch dependencies, proceeding with deletion");
+        setVersionDependencies(null);
+        return;
+      }
+
+      const depsData = await res.json();
+      setVersionDependencies(depsData);
+    } catch (error) {
+      console.error("Error fetching dependencies:", error);
+      // Continue without dependencies info
+      setVersionDependencies(null);
+    } finally {
+      setLoadingDependencies(false);
+    }
+  };
+
+  // ------- Handle delete button click - fetch dependencies first -------
+  const handleDeleteVersionClick = async (datasetId: string) => {
+    setVersionToDelete(datasetId);
+    // Fetch dependencies before showing dialog
+    await fetchVersionDependencies(datasetId);
+    setShowDeleteVersionDialog(true);
+  };
+
+  // ------- Delete version handler -------
+  const handleDeleteVersion = async () => {
+    if (!versionToDelete) {
+      toast({
+        title: "Error",
+        description: "Version ID is missing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDeletingVersion(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const deleteUrl = apiUrl(`/dataset/${encodeURIComponent(versionToDelete)}`);
+      const res = await fetch(deleteUrl, {
+        method: "DELETE",
+        headers: headers ? { ...headers, "Content-Type": "application/json" } : { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        let errorMessage = errorData.error || errorData.message || `Failed to delete version: ${res.status}`;
+
+        if (res.status === 400) {
+          // Dataset is processing
+          errorMessage = errorData.message || "Cannot delete dataset while processing. Please wait for preprocessing to complete.";
+        } else if (res.status === 410) {
+          // Already deleted
+          errorMessage = "Dataset already deleted.";
+        } else if (res.status === 404) {
+          errorMessage = "Version not found. It may have already been deleted.";
+        } else if (res.status === 403 || res.status === 401) {
+          errorMessage = "You don't have permission to delete this version.";
+        } else if (res.status === 500) {
+          errorMessage = "Server error. Please try again later.";
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const data = await res.json();
+
+      // Success - remove version from list and clear selection if needed
+      setVersions((prev) => prev.filter((v) => v.datasetId !== versionToDelete));
+
+      // If the deleted version was selected, clear selection and related state
+      if (selectedVersionDatasetId === versionToDelete) {
+        setSelectedVersionDatasetId(null);
+        setMetadata(null);
+        setFileManifest([]);
+        setStatusProgress(null);
+        setStatusPercent(null);
+        setUploadStatus("idle");
+        setStatusMessage("Idle");
+      }
+
+      // Refresh versions list
+      await fetchVersions();
+
+      toast({
+        title: "Version deleted",
+        description: data.message || "The version has been successfully deleted.",
+      });
+
+      setShowDeleteVersionDialog(false);
+      setVersionToDelete(null);
+      setVersionDependencies(null);
+    } catch (error: any) {
+      console.error("Error deleting version:", error);
+      toast({
+        title: "Failed to delete version",
+        description: error.message || "An unexpected error occurred while deleting the version.",
+        variant: "destructive",
+      });
+      // Keep dialog open on error so user can try again
+    } finally {
+      setDeletingVersion(false);
+    }
+  };
+
   // ------- Thumbnail helper: fetch protected thumbnail as blob if needed -------
   const fetchThumbnailAsObjectUrl = async (datasetId: string, fileId: string) => {
     const cacheKey = `${datasetId}:${fileId}`;
@@ -1779,35 +1994,56 @@ const DatasetManager = () => {
 
       {/* Versions and Dataset Summary - Side by Side Layout */}
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Versions list */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Versions</CardTitle>
-            <CardDescription>Click a version to view its stored subfolders & files</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {versions.length === 0 ? (
-              <div className="text-sm text-muted-foreground">No versions yet.</div>
-            ) : (
-              <div className="space-y-1">
-                {versions.map((v) => (
-                  <div key={v.datasetId} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
-                        <div className="font-medium">{v.version || v.datasetId}</div>
-                        <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
-                      </button>
-                      {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
+        {/* Versions list and Delete Button */}
+        <div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Versions</CardTitle>
+              <CardDescription>Click a version to view its stored subfolders & files</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {versions.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No versions yet.</div>
+              ) : (
+                <div className="space-y-1">
+                  {versions.map((v) => (
+                    <div key={v.datasetId} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
+                          <div className="font-medium">{v.version || v.datasetId}</div>
+                          <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
+                        </button>
+                        {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <a className="text-xs" href={apiUrl(`/dataset/${encodeURIComponent(v.datasetId)}/download`)} target="_blank" rel="noreferrer">Download</a>
+                        <button
+                          className="text-xs text-destructive hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={() => handleDeleteVersionClick(v.datasetId)}
+                          disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <a className="text-xs" href={apiUrl(`/dataset/${encodeURIComponent(v.datasetId)}/download`)} target="_blank" rel="noreferrer">Download</a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          
+          {/* Delete Project Button - Direct button below Versions Card */}
+          <div className="mt-4">
+            <Button
+              variant="destructive"
+              onClick={() => setShowDeleteProjectDialog(true)}
+              disabled={deletingProject}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete Project
+            </Button>
+          </div>
+        </div>
 
         {/* Dataset Summary */}
         {metadata && (
@@ -2238,6 +2474,127 @@ const DatasetManager = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Project Confirmation Dialog */}
+      <AlertDialog open={showDeleteProjectDialog} onOpenChange={setShowDeleteProjectDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this project? This will permanently delete the project and all associated data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingProject}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteProject}
+              disabled={deletingProject}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingProject ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Version Confirmation Dialog */}
+      <AlertDialog open={showDeleteVersionDialog} onOpenChange={(open) => {
+        setShowDeleteVersionDialog(open);
+        if (!open) {
+          setVersionToDelete(null);
+          setVersionDependencies(null);
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Version?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              {loadingDependencies ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Checking dependencies...</span>
+                </div>
+              ) : (
+                <>
+                  <p>
+                    Are you sure you want to delete this version? This will permanently delete 
+                    the version files and all associated data. This action cannot be undone.
+                  </p>
+                  {versionDependencies && versionDependencies.hasDependencies && (
+                    <div className="mt-3 pt-3 border-t">
+                      <p className="font-medium text-sm mb-2">This dataset is used by:</p>
+                      <ul className="list-disc list-inside space-y-1 text-sm">
+                        {versionDependencies.counts.trainingJobs > 0 && (
+                          <li>
+                            {versionDependencies.counts.trainingJobs} training job{versionDependencies.counts.trainingJobs > 1 ? 's' : ''}
+                            {versionDependencies.dependencies.trainingJobs.length > 0 && (
+                              <span className="text-muted-foreground text-xs ml-1">
+                                ({versionDependencies.dependencies.trainingJobs.map(j => j.jobId).join(', ')})
+                              </span>
+                            )}
+                          </li>
+                        )}
+                        {versionDependencies.counts.models > 0 && (
+                          <li>
+                            {versionDependencies.counts.models} trained model{versionDependencies.counts.models > 1 ? 's' : ''}
+                            {versionDependencies.dependencies.models.length > 0 && (
+                              <span className="text-muted-foreground text-xs ml-1">
+                                ({versionDependencies.dependencies.models.map(m => `${m.modelVersion || m.modelId} (${m.modelType || 'Unknown'})`).join(', ')})
+                              </span>
+                            )}
+                          </li>
+                        )}
+                        {versionDependencies.counts.inferenceJobs > 0 && (
+                          <li>
+                            {versionDependencies.counts.inferenceJobs} inference job{versionDependencies.counts.inferenceJobs > 1 ? 's' : ''}
+                          </li>
+                        )}
+                      </ul>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Files will be deleted but references will remain. Models and jobs will show "Dataset deleted" status.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingVersion || loadingDependencies}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteVersion}
+              disabled={deletingVersion || loadingDependencies}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingVersion ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

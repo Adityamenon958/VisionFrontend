@@ -30,7 +30,7 @@ import {
   TabsContent,
 } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { BrainCircuit, Play, Loader2, CheckCircle2, XCircle, Clock, Trash2 } from "lucide-react";
+import { BrainCircuit, Play, Loader2, CheckCircle2, XCircle, Clock, Trash2, Image as ImageIcon, Video, Camera } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   AlertDialog,
@@ -193,6 +193,10 @@ const PredictionPage = () => {
   const [loadingPastInferences, setLoadingPastInferences] = useState(false);
   const [selectedPastInferenceId, setSelectedPastInferenceId] = useState<string | null>(null);
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
+
+  // Local UI state for test inputs (drag-and-drop, select image/video)
+  const [testFiles, setTestFiles] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Refs
   const pollIntervalRef = useRef<number | null>(null);
@@ -467,6 +471,23 @@ const PredictionPage = () => {
   const handleDatasetSelect = (datasetId: string) => {
     setSelectedDatasetId(datasetId);
     saveToStorage("datasetId", datasetId);
+  };
+
+  // Handle test file additions (UI only – no API changes)
+  const handleAddTestFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setTestFiles((prev) => {
+      const existingNames = new Set(prev.map((f) => f.name));
+      const next: File[] = [...prev];
+      Array.from(files).forEach((file) => {
+        // Avoid duplicate file entries by name
+        if (!existingNames.has(file.name)) {
+          next.push(file);
+          existingNames.add(file.name);
+        }
+      });
+      return next;
+    });
   };
 
   // Handle model selection
@@ -1093,50 +1114,153 @@ const PredictionPage = () => {
           {/* Configuration Section */}
           {inferenceStatus === "idle" && selectedProjectId && (
         <div className="grid gap-6 md:grid-cols-2">
-          {/* Dataset Selection */}
+          {/* Test Inputs (replaces Dataset Selection visually, keeps logic unchanged) */}
           <Card>
             <CardHeader>
-              <CardTitle>Select Dataset</CardTitle>
-              <CardDescription>Choose a dataset with test images</CardDescription>
+              <CardTitle>Test Inputs</CardTitle>
+              <CardDescription>Add test images, videos, or use your camera for inference</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {loadingDatasets ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : datasets.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No ready datasets available for this project. Datasets must have test images.
+              {/* Drag & Drop Area */}
+              <div
+                className={cn(
+                  "border-2 border-dashed rounded-lg px-4 py-8 flex flex-col items-center justify-center text-center transition-colors cursor-pointer",
+                  isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/30 bg-muted/20 hover:bg-muted/30"
+                )}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  handleAddTestFiles(e.dataTransfer.files);
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    const input = document.getElementById("prediction-test-files-input");
+                    if (input) {
+                      (input as HTMLInputElement).click();
+                    }
+                  }
+                }}
+              >
+                <BrainCircuit className="h-8 w-8 text-primary mb-3" />
+                <p className="text-sm font-medium">
+                  Drag &amp; drop test images or videos here
                 </p>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-auto">
-                  {datasets.map((dataset, idx) => {
-                    const datasetId = dataset.datasetId || dataset._id || dataset.id || "";
-                    const isSelected = datasetId === selectedDatasetId;
-                    const datasetKey = datasetId || `dataset-${idx}`;
-                    return (
-                      <button
-                        key={datasetKey}
-                        onClick={() => handleDatasetSelect(datasetId)}
-                        className={cn(
-                          "w-full text-left p-3 rounded-md border transition-colors",
-                          isSelected
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:bg-muted"
-                        )}
-                      >
-                        <div className="font-medium">{dataset.version || "Unversioned"}</div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Test: {dataset.testCount || 0} • Total: {dataset.totalImages || 0}
-                        </div>
-                        {dataset.createdAt && (
-                          <div className="text-xs text-muted-foreground">
-                            {new Date(dataset.createdAt).toLocaleDateString()}
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
+                <p className="text-xs text-muted-foreground mt-1">
+                  Supported formats: common image (PNG, JPG) and video (MP4, MOV) files
+                </p>
+              </div>
+
+              {/* Hidden file inputs for Select image / Select video */}
+              <input
+                id="prediction-test-files-input"
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handleAddTestFiles(e.target.files);
+                  // Do not clear the value so the same file can be re-selected if needed
+                }}
+              />
+              <input
+                id="prediction-test-image-input"
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handleAddTestFiles(e.target.files);
+                  // Do not clear the value so the same file can be re-selected if needed
+                }}
+              />
+              <input
+                id="prediction-test-video-input"
+                type="file"
+                accept="video/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handleAddTestFiles(e.target.files);
+                  // Do not clear the value so the same file can be re-selected if needed
+                }}
+              />
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex items-center gap-2"
+                  onClick={() => {
+                    const input = document.getElementById("prediction-test-image-input");
+                    if (input) {
+                      (input as HTMLInputElement).click();
+                    }
+                  }}
+                >
+                  <ImageIcon className="h-4 w-4" />
+                  Select image
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex items-center gap-2"
+                  onClick={() => {
+                    const input = document.getElementById("prediction-test-video-input");
+                    if (input) {
+                      (input as HTMLInputElement).click();
+                    }
+                  }}
+                >
+                  <Video className="h-4 w-4" />
+                  Select video
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex items-center gap-2"
+                  // UI only: placeholder for future live camera support
+                  onClick={() => {
+                    toast({
+                      title: "Live camera",
+                      description: "Live camera input will be supported in a future update.",
+                    });
+                  }}
+                >
+                  <Camera className="h-4 w-4" />
+                  Live camera
+                </Button>
+              </div>
+
+              {/* Selected files summary (UI only) */}
+              {testFiles.length > 0 && (
+                <div className="mt-2 rounded-md bg-muted/40 border border-dashed border-muted-foreground/30 px-3 py-2 text-xs">
+                  <div className="font-medium mb-1">
+                    {testFiles.length} file{testFiles.length !== 1 ? "s" : ""} selected
+                  </div>
+                  <div className="space-y-0.5 max-h-20 overflow-auto">
+                    {testFiles.slice(0, 3).map((file) => (
+                      <div key={file.name} className="truncate text-muted-foreground">
+                        {file.name}
+                      </div>
+                    ))}
+                    {testFiles.length > 3 && (
+                      <div className="text-muted-foreground">
+                        + {testFiles.length - 3} more
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </CardContent>
