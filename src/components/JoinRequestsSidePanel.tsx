@@ -156,11 +156,11 @@ export const JoinRequestsSidePanel: React.FC<JoinRequestsSidePanelProps> = ({
     if (!request) return;
 
     setActionLoading(requestId);
-    try {
+    try {     
       // Use Edge Function to reject request and send email (bypasses RLS)
       const { data, error } = await supabase.functions.invoke("reject-workspace-request", {
         body: { token: request.token },
-      });
+        });
 
       if (error) {
         console.error("[JoinRequestsSidePanel] Rejection error:", error);

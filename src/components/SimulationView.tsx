@@ -1736,25 +1736,25 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
               {/* Defaults card */}
               <TooltipProvider>
-                <div className="mb-4 p-3 border rounded">
+              <div className="mb-4 p-3 border rounded">
                   <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <div className="font-medium">Default Training Parameters</div>
+                  <div>
+                    <div className="font-medium">Default Training Parameters</div>
                       <div className="text-xs text-muted-foreground">
                         These are fetched from the backend for the selected model type.
                       </div>
-                    </div>
-                    <div>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={useDefaults}
-                          onChange={(e) => setUseDefaults(e.target.checked)}
-                        />
-                        <span>Use defaults</span>
-                      </label>
-                    </div>
                   </div>
+                  <div>
+                      <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={useDefaults}
+                        onChange={(e) => setUseDefaults(e.target.checked)}
+                      />
+                        <span>Use defaults</span>
+                    </label>
+                  </div>
+                </div>
 
                   <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                     {/* Epochs */}
@@ -1774,8 +1774,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                       </div>
                       <div className="text-sm font-semibold">
                         {defaultParams?.epochs ?? 100}
-                      </div>
-                    </div>
+                </div>
+              </div>
 
                     {/* Batch Size */}
                     <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
