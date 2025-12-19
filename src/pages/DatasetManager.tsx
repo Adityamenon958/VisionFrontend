@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { List, X, Download, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown, Trash2, Loader2 } from "lucide-react";
+import { List, X, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown, Trash2, Loader2 } from "lucide-react";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 import { cn } from "@/lib/utils";
 import {
@@ -568,8 +568,9 @@ const DatasetManager = () => {
       });
       
       // Map API response fields to FileEntry interface
+      // Prefer explicit id/fileId, but fall back to MongoDB _id when needed
       const list: FileEntry[] = rawFiles.map((file: any) => ({
-        id: file.id || file.fileId,
+        id: file.id || file.fileId || file._id,
         storedName: file.storedName,
         originalName: file.originalName || file.name || "",
         type: file.type,
@@ -878,7 +879,7 @@ const DatasetManager = () => {
         // Fetch label file content - try download endpoint first, then regular file endpoint
         try {
           const headers = await getAuthHeaders();
-          let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}/download`);
+          let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
           let res = await fetch(url, { method: "GET", headers });
           
           // If download endpoint doesn't exist, try regular file endpoint
@@ -921,7 +922,7 @@ const DatasetManager = () => {
       // Fetch label file content - try download endpoint first, then regular file endpoint
       try {
         const headers = await getAuthHeaders();
-        let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/download`);
+        let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}`);
         let res = await fetch(url, { method: "GET", headers });
         
         // If download endpoint doesn't exist, try regular file endpoint
@@ -1695,7 +1696,8 @@ const DatasetManager = () => {
   const FileCard = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    const thumbEndpoint = datasetId && file.thumbnailAvailable === true && file.id && isImage
+    // Only attempt thumbnail when backend explicitly marks it as available
+    const thumbEndpoint = datasetId && file.id && isImage
       ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
       : null;
 
@@ -1741,7 +1743,8 @@ const DatasetManager = () => {
   const FileListItem = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    const thumbEndpoint = datasetId && file.thumbnailAvailable === true && file.id && isImage
+    // Only attempt thumbnail when backend explicitly marks it as available
+    const thumbEndpoint = datasetId && file.id && isImage
       ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
       : null;
 
@@ -2002,33 +2005,32 @@ const DatasetManager = () => {
               <CardDescription>Click a version to view its stored subfolders & files</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {versions.length === 0 ? (
-                <div className="text-sm text-muted-foreground">No versions yet.</div>
-              ) : (
-                <div className="space-y-1">
-                  {versions.map((v) => (
-                    <div key={v.datasetId} className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
-                          <div className="font-medium">{v.version || v.datasetId}</div>
-                          <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
-                        </button>
-                        {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <a className="text-xs" href={apiUrl(`/dataset/${encodeURIComponent(v.datasetId)}/download`)} target="_blank" rel="noreferrer">Download</a>
-                        <button
-                          className="text-xs text-destructive hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-                          onClick={() => handleDeleteVersionClick(v.datasetId)}
-                          disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
-                        >
-                          Delete
-                        </button>
-                      </div>
+                  {versions.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No versions yet.</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {versions.map((v) => (
+                        <div key={v.datasetId} className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <button className="text-left" onClick={() => onSelectVersion(v.datasetId)}>
+                              <div className="font-medium">{v.version || v.datasetId}</div>
+                              <div className="text-xs text-muted-foreground">{v.createdAt ? new Date(v.createdAt).toLocaleString() : ""}</div>
+                            </button>
+                            {selectedVersionDatasetId === v.datasetId && <span className="text-xs text-primary"> (selected)</span>}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              className="text-xs text-destructive hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                              onClick={() => handleDeleteVersionClick(v.datasetId)}
+                              disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
+                  )}
             </CardContent>
           </Card>
           
@@ -2266,9 +2268,10 @@ const DatasetManager = () => {
             {/* Full-size Image with Zoom & Pan */}
             {selectedImageFile && (() => {
               const datasetId = selectedVersionDatasetId || currentDatasetId || "";
-              const imageUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/download`);
+              const imageUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
               const fallbackUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
-              const thumbnailUrl = selectedImageFile.thumbnailAvailable 
+              // Try thumbnail as an additional fallback only when backend marks it as available
+              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id
                 ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`)
                 : null;
               
@@ -2428,40 +2431,7 @@ const DatasetManager = () => {
               </Button>
             </div>
             
-            <div className="flex items-center gap-2">
-              {selectedImageFile && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    const datasetId = selectedVersionDatasetId || currentDatasetId;
-                    if (datasetId) {
-                      const downloadUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/download`);
-                      window.open(downloadUrl, '_blank');
-                    }
-                  }}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download
-                </Button>
-              )}
-              {selectedLabelFile && !selectedImageFile && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    const datasetId = selectedVersionDatasetId || currentDatasetId;
-                    if (datasetId) {
-                      const downloadUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedLabelFile.id)}/download`);
-                      window.open(downloadUrl, '_blank');
-                    }
-                  }}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Label
-                </Button>
-              )}
-            </div>
+            <div className="flex items-center gap-2" />
           </div>
           
           {/* Keyboard Shortcuts Hint */}

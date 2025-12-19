@@ -56,6 +56,7 @@ const PredictionHistoryDetailsPage = () => {
   const [loading, setLoading] = useState(true);
   const [results, setResults] = useState<HistoryInferenceResults | null>(null);
   const [imageFilter, setImageFilter] = useState<'all' | 'good' | 'defect'>('all');
+  const [hasTags, setHasTags] = useState(false);
 
   // Helper function to normalize annotated images from either structure
   const normalizeAnnotatedImages = (
@@ -151,6 +152,7 @@ const PredictionHistoryDetailsPage = () => {
       };
 
       setResults(normalized);
+      setHasTags(Boolean(normalized.statistics?.hasTags));
     } catch (err: unknown) {
       console.error("Error loading history results:", err);
       const errorMessage = err instanceof Error ? err.message : "Could not fetch inference results.";
@@ -172,16 +174,10 @@ const PredictionHistoryDetailsPage = () => {
 
   // Refetch when filter changes (only for new jobs with tags)
   useEffect(() => {
-    if (!results || results.statistics?.hasTags !== true) return;
-    
-    // Debounce to avoid too many requests
-    const timeoutId = setTimeout(() => {
-      void fetchResults(imageFilter);
-    }, 300);
-    
-    return () => clearTimeout(timeoutId);
+    if (!inferenceId || !hasTags) return;
+    void fetchResults(imageFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageFilter, results]);
+  }, [imageFilter, hasTags, inferenceId]);
 
   return (
     <div className={cn("container mx-auto py-6 space-y-6")}>
