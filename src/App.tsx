@@ -1,5 +1,5 @@
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
 import Landing from "@/pages/Landing";
 import Auth from "@/pages/Auth";
 import Dashboard from "@/pages/Dashboard";
@@ -26,14 +26,12 @@ import { AccountSecurityPage } from "@/pages/AccountSecurityPage";
 import { AccountPreferencesPage } from "@/pages/AccountPreferencesPage";
 import PredictionPage from "@/pages/PredictionPage";
 import PredictionHistoryDetailsPage from "@/pages/PredictionHistoryDetailsPage";
-import { saveLastRoute, getLastRoute } from "@/utils/routePersistence";
+// Route persistence is handled by useRoutePersistence hook in AppShell
 
 // Protected routes component - gates routes behind authentication
 const ProtectedRoutes = () => {
   const navigate = useNavigate();
   const { sessionReady, user, loading } = useProfile();
-  const location = useLocation();
-  const hasRestoredRouteRef = useRef(false);
 
   // Redirect to auth if session is ready but no user
   useEffect(() => {
@@ -42,29 +40,8 @@ const ProtectedRoutes = () => {
     }
   }, [sessionReady, user, navigate]);
 
-  // Persist the last visited protected route for resume-on-return behavior
-  useEffect(() => {
-    if (!sessionReady || !user) return;
-    // Only track routes inside the protected app (already enforced by routing),
-    // and avoid storing the auth or landing page paths.
-    const path = `${location.pathname}${location.search}${location.hash}`;
-    saveLastRoute(path);
-  }, [sessionReady, user, location.pathname, location.search, location.hash]);
-
-  // On first load after session is ready, if user lands on the generic dashboard,
-  // try to restore a more specific last route (e.g. a particular dashboard subpage).
-  useEffect(() => {
-    if (!sessionReady || !user) return;
-    if (hasRestoredRouteRef.current) return;
-
-    if (location.pathname === "/dashboard") {
-      const lastRoute = getLastRoute();
-      if (lastRoute && lastRoute !== "/dashboard") {
-        hasRestoredRouteRef.current = true;
-        navigate(lastRoute, { replace: true });
-      }
-    }
-  }, [sessionReady, user, location.pathname, navigate]);
+  // Route persistence is now handled by useRoutePersistence hook in AppShell
+  // No duplicate persistence logic needed here
 
   // Show loading while session is being hydrated
   if (!sessionReady || loading) {

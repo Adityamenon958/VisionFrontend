@@ -41,11 +41,19 @@ interface HistoryInferenceResults {
     tag?: string;
   }>;
   statistics?: {
-    total: number;
+    total: number;        // Total files (images + videos)
+    totalImages?: number; // Optional: image count
+    totalVideos?: number; // Optional: video count
     good: number;
     defect: number;
     hasTags: boolean;
   };
+  // Optional videos array from backend (additive)
+  videos?: Array<{
+    filename: string;
+    url: string;
+    fileType?: string;
+  }>;
 }
 
 const PredictionHistoryDetailsPage = () => {
@@ -101,6 +109,27 @@ const PredictionHistoryDetailsPage = () => {
     return [];
   };
 
+  // Helper function to normalize videos from backend response
+  const normalizeVideos = (
+    videos: Array<{ filename?: string; url?: string }> | undefined,
+    inferenceId: string
+  ): Array<{ filename: string; url: string; fileType?: string }> => {
+    if (!videos || !Array.isArray(videos)) return [];
+
+    const apiBase = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+
+    return videos.map((vid) => {
+      const raw = vid.url || "";
+      const basePath = raw.startsWith("/api/") ? raw.slice(4) : raw;
+      const fullUrl = apiBase ? `${apiBase}/${basePath.replace(/^\/+/, "")}` : raw;
+      return {
+        filename: vid.filename || "",
+        url: fullUrl,
+        fileType: "video",
+      };
+    });
+  };
+
   const fetchResults = async (filter: 'all' | 'good' | 'defect' = 'all') => {
     if (!inferenceId) return;
 
@@ -134,6 +163,13 @@ const PredictionHistoryDetailsPage = () => {
 
       // Normalize annotated images from either structure
       const normalizedImages = normalizeAnnotatedImages(data.annotatedImages, inferenceId);
+      // Normalize videos (if any)
+      const normalizedVideos = normalizeVideos(
+        (data.videos as Array<{ filename?: string; url?: string }>)
+          || (data.metadata?.videos as Array<{ filename?: string; url?: string }>)
+          || [],
+        inferenceId
+      );
 
       const normalized: HistoryInferenceResults = {
         ...data,
@@ -143,8 +179,11 @@ const PredictionHistoryDetailsPage = () => {
             averageConfidence: item.avgConfidence ?? item.averageConfidence ?? 0,
           })) || [],
         annotatedImages: normalizedImages,
+        videos: normalizedVideos,
         statistics: data.statistics || {
-          total: normalizedImages.length,
+          total: normalizedImages.length + normalizedVideos.length,
+          totalImages: normalizedImages.length,
+          totalVideos: normalizedVideos.length,
           good: 0,
           defect: 0,
           hasTags: false,
@@ -189,7 +228,7 @@ const PredictionHistoryDetailsPage = () => {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => navigate("/project/prediction")}
+        onClick={() => navigate("/project/prediction?tab=history")}
         className="px-0"
       >
         <ArrowLeft className="mr-2 h-4 w-4" />
@@ -212,7 +251,7 @@ const PredictionHistoryDetailsPage = () => {
         </Card>
       ) : (
         <div className="space-y-4">
-          {/* Summary */}
+              {/* Summary */}
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Results Summary</CardTitle>
@@ -243,16 +282,32 @@ const PredictionHistoryDetailsPage = () => {
               {results.statistics && results.statistics.hasTags && (
                 <div className="grid gap-4 md:grid-cols-3 mt-4 pt-4 border-t">
                   <div>
-                    <div className="text-xl font-bold">{results.statistics.total}</div>
-                    <div className="text-xs text-muted-foreground">Total Images</div>
+                    <div className="text-xl font-bold">
+                      {results.statistics.total}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Total Files (Images + Videos)
+                    </div>
                   </div>
                   <div>
-                    <div className="text-xl font-bold text-green-600">{results.statistics.good}</div>
-                    <div className="text-xs text-muted-foreground">Good Images</div>
+                    <div className="text-xl font-bold text-green-600">
+                      {results.statistics.totalImages ??
+                        (Array.isArray(results.annotatedImages)
+                          ? results.annotatedImages.length
+                          : 0)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Total Images
+                    </div>
                   </div>
                   <div>
-                    <div className="text-xl font-bold text-red-600">{results.statistics.defect}</div>
-                    <div className="text-xs text-muted-foreground">Defect Images</div>
+                    <div className="text-xl font-bold text-blue-600">
+                      {results.statistics.totalVideos ??
+                        (results.videos ? results.videos.length : 0)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Total Videos
+                    </div>
                   </div>
                 </div>
               )}
@@ -457,6 +512,40 @@ const PredictionHistoryDetailsPage = () => {
               </Card>
             );
           })()}
+
+          {/* Videos (if any) */}
+          {results.videos && results.videos.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Videos</CardTitle>
+                <CardDescription>
+                  {results.statistics?.totalVideos ?? results.videos.length} video
+                  {(results.statistics?.totalVideos ?? results.videos.length) !== 1 ? "s" : ""} processed
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {results.videos.map((video, idx) => (
+                    <div
+                      key={video.filename || video.url || `history-video-${idx}`}
+                      className="space-y-2"
+                    >
+                      <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
+                        <video
+                          src={video.url}
+                          controls
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                      <div className="text-xs text-muted-foreground truncate">
+                        {video.filename}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
     </div>

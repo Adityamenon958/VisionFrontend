@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useRef, type ReactNode } from 
 import { supabase } from "@/integrations/supabase/client";
 import { isUserAdmin } from "@/lib/utils/adminUtils";
 import { ProfileContext, type ProfileContextType } from "./profile-context";
+import { clearLastRoute } from "@/utils/routePersistence";
 
 type ProfileProviderProps = {
   children: ReactNode;
@@ -170,11 +171,15 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
             }
           }
         } catch (err: any) {
-          console.error("Error loading profile:", err);
           const message = err?.message || "Failed to load profile";
           const isTimeoutError =
             message.includes("Profile fetch timeout after 8 seconds") ||
             message.includes("Profile fetch safety timeout after 10 seconds");
+
+          // Only log real errors to console; suppress timeout errors from console.error
+          if (!isTimeoutError) {
+            console.error("Error loading profile:", err);
+          }
 
           if (isTimeoutError) {
             // Soft-handle profile timeouts: keep existing profile/company/admin state
@@ -246,20 +251,23 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
         }
 
         setUser(session.user);
-        // Add a safety timeout to ensure sessionReady is always set, even if loadProfile hangs
-        const loadProfileWithTimeout = Promise.race([
-          loadProfile(session),
-          new Promise<void>((resolve) => {
-            setTimeout(() => {
-              console.error("[ProfileContext] loadProfile safety timeout - forcing sessionReady");
-              resolve();
-            }, 15000); // 15 second safety timeout
-          }),
-        ]);
+        // Load profile and set sessionReady after completion
+        // Use a safety timeout to ensure we don't hang forever, but prefer waiting for actual completion
+        const loadProfilePromise = loadProfile(session);
+        const safetyTimeout = new Promise<void>((resolve) => {
+          setTimeout(() => {
+            if (isDev) {
+              console.warn("[ProfileContext] loadProfile safety timeout - setting sessionReady after 15s");
+            }
+            resolve();
+          }, 15000); // 15 second safety timeout
+        });
 
         try {
-          await loadProfileWithTimeout;
-          // Set sessionReady after loadProfile completes successfully
+          // Race between profile load and safety timeout
+          await Promise.race([loadProfilePromise, safetyTimeout]);
+          // Set sessionReady after loadProfile completes (or timeout)
+          // If profile is still loading, it will complete in background
           setSessionReady(true);
           if (isDev) {
             console.log("[ProfileContext] Session hydrated successfully");
@@ -295,6 +303,8 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
         setIsAdmin(false);
         setSessionReady(true);
         setLoading(false);
+        // Clear route persistence on logout
+        clearLastRoute();
       } else if (
         event === "SIGNED_IN" ||
         event === "TOKEN_REFRESHED" ||

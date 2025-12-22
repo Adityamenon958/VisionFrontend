@@ -17,30 +17,24 @@ const AppShellContent = () => {
   const hasRefreshedAfterIdleRef = useRef(false);
   const INACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
-  // Handle navigation on sign out (ProfileContext handles state clearing)
+  // Show error toast if session restore fails (but suppress soft profile timeouts)
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_OUT" || !session) {
-        navigate("/auth");
-      }
-    });
+    if (!sessionReady || !error) return;
 
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [navigate]);
+    const isProfileTimeout =
+      error.includes("Profile fetch timeout after 8 seconds") ||
+      error.includes("Profile fetch safety timeout after 10 seconds");
 
-  // Show error toast if session restore fails
-  useEffect(() => {
-    if (sessionReady && error) {
-      toast({
-        title: "Session Error",
-        description: error,
-        variant: "destructive",
-      });
+    if (isProfileTimeout) {
+      // Treat profile timeouts as soft warnings: keep state, no user-facing toast
+      return;
     }
+
+    toast({
+      title: "Session Error",
+      description: error,
+      variant: "destructive",
+    });
   }, [sessionReady, error, toast]);
 
   // Restore route after session is ready and user is authenticated

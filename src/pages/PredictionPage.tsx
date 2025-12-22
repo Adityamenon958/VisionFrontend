@@ -1,6 +1,6 @@
 // src/pages/PredictionPage.tsx
 import { useEffect, useState, useRef, useCallback } from "react"; 
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/pages/PageHeader";
@@ -120,10 +120,27 @@ interface InferenceResults {
     }>;
   }>;
   statistics?: {
-    total: number;
+    total: number;        // Total files (images + videos)
+    totalImages?: number; // Optional: number of images
+    totalVideos?: number; // Optional: number of videos
     good: number;
     defect: number;
     hasTags: boolean; // Indicates if job has tagging (new jobs)
+  };
+  // Optional videos array from backend (additive, backward compatible)
+  videos?: Array<{
+    filename: string;
+    url: string;
+    fileType?: string;
+  }>;
+  // Optional metadata block from backend (may contain richer file info)
+  metadata?: {
+    totalFiles?: number;
+    totalImages?: number;
+    totalVideos?: number;
+    videos?: any[];
+    images?: any[];
+    files?: any[];
   };
 }
 
@@ -185,6 +202,7 @@ type InferenceMode = "dataset" | "custom";
 const PredictionPage = () => {
   const { profile, company, sessionReady } = useProfile();
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // State
   const [projects, setProjects] = useState<any[]>([]);
@@ -211,8 +229,11 @@ const PredictionPage = () => {
   const [deletingInference, setDeletingInference] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   
-  // History view state
-  const [viewMode, setViewMode] = useState<"new" | "history">("new");
+  // History view state - initialize from URL query parameter
+  const [viewMode, setViewMode] = useState<"new" | "history">(() => {
+    const tabParam = searchParams.get("tab");
+    return tabParam === "history" ? "history" : "new";
+  });
   const [pastInferences, setPastInferences] = useState<InferenceJob[]>([]);
   const [loadingPastInferences, setLoadingPastInferences] = useState(false);
   const [selectedPastInferenceId, setSelectedPastInferenceId] = useState<string | null>(null);
@@ -252,6 +273,7 @@ const PredictionPage = () => {
   const liveInferenceIdRef = useRef<string | null>(null);
   const isLiveInferenceRunningRef = useRef<boolean>(false);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const hasRestoredStateRef = useRef<string | null>(null);
 
   const navigate = useNavigate();
 
@@ -302,6 +324,15 @@ const PredictionPage = () => {
       // ignore
     }
   };
+
+  // Sync viewMode with URL query parameter when URL changes
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (tabParam === "history") {
+      setViewMode("history");
+    }
+    // If no tab param, keep current viewMode (initialized from URL on mount)
+  }, [searchParams]); // Only depend on searchParams to sync URL -> State
 
   // Restore inference mode on mount
   useEffect(() => {
@@ -359,14 +390,25 @@ const PredictionPage = () => {
     loadProjects();
   }, [sessionReady, profile?.company_id]);
 
-  // Restore state on mount (after projects are loaded)
+  // Restore state on mount (after projects are loaded and project is selected)
+  // Use a ref to ensure we only restore once per project selection
   useEffect(() => {
-    if (!sessionReady || !selectedProjectId) {
-      // Clear selections if no project selected
+    if (!sessionReady || !selectedProjectId || loadingProjects) {
+      // Clear selections if no project selected or still loading
+      if (!selectedProjectId) {
       setSelectedDatasetId(null);
       setSelectedModelId(null);
+        hasRestoredStateRef.current = null;
+      }
       return;
     }
+
+    // Only restore once per project selection
+    if (hasRestoredStateRef.current === selectedProjectId) {
+      return;
+    }
+
+    hasRestoredStateRef.current = selectedProjectId;
 
     const savedDatasetId = loadFromStorage<string | null>("datasetId", null);
     const savedModelId = loadFromStorage<string | null>("modelId", null);
@@ -377,7 +419,7 @@ const PredictionPage = () => {
     if (savedDatasetId) setSelectedDatasetId(savedDatasetId);
     if (savedModelId) setSelectedModelId(savedModelId);
     setConfidenceThreshold(savedConfidence);
-  }, [sessionReady, selectedProjectId]);
+  }, [sessionReady, selectedProjectId, loadingProjects]);
 
   // Restore inference state separately (after functions are defined)
   useEffect(() => {
@@ -537,7 +579,7 @@ const PredictionPage = () => {
     saveToStorage("inferenceMode", mode);
   };
 
-  // Handle test file additions (UI only – no API changes)
+  // Handle test image additions (UI only – no API changes)
   const handleAddTestFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
@@ -573,6 +615,49 @@ const PredictionPage = () => {
       });
       return next;
     });
+  };
+
+  // Handle test video addition (single video, UI only – no API changes)
+  const handleAddTestVideo = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const incoming = Array.from(files);
+
+    // Enforce single video selection
+    if (incoming.length > 1) {
+      toast({
+        title: "Only one video allowed",
+        description: "Please select a single video file.",
+        variant: "destructive",
+      });
+    }
+
+    const videoFile = incoming[0];
+    if (!videoFile) return;
+
+    const allowedVideoExtensions = ["mp4", "mov", "avi", "mkv"];
+    const ext = videoFile.name.toLowerCase().split(".").pop() || "";
+    if (!allowedVideoExtensions.includes(ext)) {
+      toast({
+        title: "Unsupported video format",
+        description: "Only MP4, MOV, AVI, or MKV video files are supported.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setTestFiles((prev) => {
+      const existingNames = new Set(prev.map((f) => f.name));
+      if (existingNames.has(videoFile.name)) {
+        return prev;
+      }
+      return [...prev, videoFile];
+    });
+  };
+
+  // Remove a single custom test file by name
+  const handleRemoveTestFile = (fileName: string) => {
+    setTestFiles((prev) => prev.filter((file) => file.name !== fileName));
   };
 
   // Handle model selection
@@ -1568,6 +1653,29 @@ const PredictionPage = () => {
     return [];
   };
 
+  // Helper function to normalize videos from backend response
+  const normalizeVideos = (
+    videos: any[] | undefined,
+    inferenceId: string
+  ): Array<{ filename: string; url: string; fileType?: string }> => {
+    if (!videos || !Array.isArray(videos)) return [];
+
+    return videos.map((vid) => {
+      const rawPath =
+        vid.url && typeof vid.url === "string" && vid.url.startsWith("/api/")
+          ? vid.url.slice(4) // remove leading "/api"
+          : vid.url ||
+            `/inference/${encodeURIComponent(inferenceId)}/image/${encodeURIComponent(
+              vid.filename,
+            )}`;
+
+      return {
+        ...vid,
+        url: apiUrl(rawPath),
+      };
+    });
+  };
+
   // Fetch results
   const fetchResults = async (id: string, filter: 'all' | 'good' | 'defect' = 'all') => {
     setLoadingResults(true);
@@ -1594,6 +1702,11 @@ const PredictionPage = () => {
 
       // Normalize annotated images from either structure
       const normalizedImages = normalizeAnnotatedImages(data.annotatedImages, id);
+      // Normalize videos (if any) from new response structure
+      const normalizedVideos = normalizeVideos(
+        (data.videos as any[]) || (data.metadata?.videos as any[]) || [],
+        id
+      );
 
       // Normalize detectionsByClass to use consistent field names
       const normalizedData: InferenceResults = {
@@ -1604,8 +1717,11 @@ const PredictionPage = () => {
             averageConfidence: item.avgConfidence ?? item.averageConfidence ?? 0,
           })) || [],
         annotatedImages: normalizedImages,
+        videos: normalizedVideos,
         statistics: data.statistics || {
-          total: normalizedImages.length,
+          total: normalizedImages.length + normalizedVideos.length,
+          totalImages: normalizedImages.length,
+          totalVideos: normalizedVideos.length,
           good: 0,
           defect: 0,
           hasTags: false,
@@ -1964,7 +2080,18 @@ const PredictionPage = () => {
       />
 
       {/* Tabs for New Inference and History */}
-      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "new" | "history")}>
+      <Tabs value={viewMode} onValueChange={(value) => {
+        const newMode = value as "new" | "history";
+        setViewMode(newMode);
+        // Update URL query parameter
+        const newSearchParams = new URLSearchParams(searchParams);
+        if (newMode === "history") {
+          newSearchParams.set("tab", "history");
+        } else {
+          newSearchParams.delete("tab");
+        }
+        setSearchParams(newSearchParams, { replace: true });
+      }}>
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="new">New Inference</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
@@ -2056,6 +2183,20 @@ const PredictionPage = () => {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        if (isLiveInferenceRunning) {
+                          void handleStopLiveInference();
+                        } else {
+                          setLiveCameraMode(false);
+                        }
+                      }}
+                    >
+                      Back to New Inference
+                    </Button>
                     {isLiveInferenceRunning && (
                       <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
                         <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -2328,11 +2469,10 @@ const PredictionPage = () => {
                     <input
                       id="prediction-test-files-input"
                       type="file"
-                      accept="image/*"
-                      multiple
+                      accept="video/*"
                       className="hidden"
                       onChange={(e) => {
-                        handleAddTestFiles(e.target.files);
+                        handleAddTestVideo(e.target.files);
                       }}
                     />
                     <input
@@ -2374,7 +2514,7 @@ const PredictionPage = () => {
                         }}
                       >
                         <Video className="h-4 w-4" />
-                        Select multiple images
+                        Select video
                       </Button>
                       <Button
                         type="button"
@@ -2386,6 +2526,16 @@ const PredictionPage = () => {
                             handleStopLiveInference();
                             setLiveCameraMode(false);
                           } else {
+                            // Require trained model before entering live camera mode
+                            if (!selectedModelId) {
+                              toast({
+                                title: "Select a trained model",
+                                description: "Please select a trained model before starting live camera inference.",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+
                             // Enter live camera mode
                             setLiveCameraMode(true);
                             setInferenceMode("custom"); // Ensure we're in custom mode
@@ -2405,8 +2555,21 @@ const PredictionPage = () => {
                         </div>
                         <div className="space-y-0.5 max-h-20 overflow-auto">
                           {testFiles.slice(0, 3).map((file) => (
-                            <div key={file.name} className="truncate text-muted-foreground">
-                              {file.name}
+                            <div
+                              key={file.name}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <span className="truncate text-muted-foreground">
+                                {file.name}
+                              </span>
+                              <button
+                                type="button"
+                                className="shrink-0 text-muted-foreground hover:text-destructive"
+                                onClick={() => handleRemoveTestFile(file.name)}
+                                aria-label={`Remove ${file.name}`}
+                              >
+                                ×
+                              </button>
                             </div>
                           ))}
                           {testFiles.length > 3 && (
@@ -2691,16 +2854,32 @@ const PredictionPage = () => {
                   {results.statistics && results.statistics.hasTags && (
                     <div className="grid gap-4 md:grid-cols-3 mt-4 pt-4 border-t">
                       <div>
-                        <div className="text-2xl font-bold">{results.statistics.total}</div>
-                        <div className="text-sm text-muted-foreground">Total Images</div>
+                        <div className="text-2xl font-bold">
+                          {results.statistics.total}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Total Files (Images + Videos)
+                        </div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-green-600">{results.statistics.good}</div>
-                        <div className="text-sm text-muted-foreground">Good Images</div>
+                        <div className="text-2xl font-bold text-green-600">
+                          {results.statistics.totalImages ??
+                            (Array.isArray(results.annotatedImages)
+                              ? results.annotatedImages.length
+                              : 0)}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Total Images
+                        </div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-red-600">{results.statistics.defect}</div>
-                        <div className="text-sm text-muted-foreground">Defect Images</div>
+                        <div className="text-2xl font-bold text-blue-600">
+                          {results.statistics.totalVideos ??
+                            (results.videos ? results.videos.length : 0)}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Total Videos
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2761,17 +2940,17 @@ const PredictionPage = () => {
                 }
                 
                 return (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Annotated Images</CardTitle>
-                      <CardDescription>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Annotated Images</CardTitle>
+                    <CardDescription>
                         {showFilters
                           ? `${results.statistics?.total || imagesArray.length} total images`
                           : `${imagesArray.length} image${imagesArray.length !== 1 ? "s" : ""} with detections`
                         }
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
                       {showFilters ? (
                         <Tabs value={imageFilter} onValueChange={(value) => setImageFilter(value as 'all' | 'good' | 'defect')}>
                           <TabsList className="grid w-full max-w-md grid-cols-3 mb-4">
@@ -2787,16 +2966,16 @@ const PredictionPage = () => {
                           </TabsList>
                           
                           <TabsContent value="all" className="mt-0">
-                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                               {imagesArray.map((img: any, idx: number) => (
-                                <div key={img.filename || img.url || `image-${idx}`} className="space-y-2">
-                                  <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                    <img
-                                      src={img.url}
-                                      alt={img.filename}
-                                      className="w-full h-full object-contain"
-                                      loading="lazy"
-                                    />
+                        <div key={img.filename || img.url || `image-${idx}`} className="space-y-2">
+                          <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
+                            <img
+                              src={img.url}
+                              alt={img.filename}
+                              className="w-full h-full object-contain"
+                              loading="lazy"
+                            />
                                     {img.tag && img.tag !== 'unreviewed' && (
                                       <Badge
                                         variant="outline"
@@ -2809,19 +2988,19 @@ const PredictionPage = () => {
                                         {img.tag === 'good' ? '✅ Good' : '❌ Defect'}
                                       </Badge>
                                     )}
-                                  </div>
-                                  <div className="text-xs text-muted-foreground truncate">
-                                    {img.filename}
-                                  </div>
-                                  {img.detections && img.detections.length > 0 && (
-                                    <div className="text-xs text-muted-foreground">
-                                      {img.detections.length} detection
-                                      {img.detections.length !== 1 ? "s" : ""}
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {img.filename}
+                          </div>
+                          {img.detections && img.detections.length > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                              {img.detections.length} detection
+                              {img.detections.length !== 1 ? "s" : ""}
                             </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                           </TabsContent>
                           <TabsContent value="good" className="mt-0">
                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -2911,10 +3090,44 @@ const PredictionPage = () => {
                           ))}
                         </div>
                       )}
-                    </CardContent>
-                  </Card>
+                  </CardContent>
+                </Card>
                 );
               })()}
+
+              {/* Videos (if any) */}
+              {results.videos && results.videos.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Videos</CardTitle>
+                    <CardDescription>
+                      {results.statistics?.totalVideos ?? results.videos.length} video
+                      {(results.statistics?.totalVideos ?? results.videos.length) !== 1 ? "s" : ""} processed
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {results.videos.map((video, idx) => (
+                        <div
+                          key={video.filename || video.url || `video-${idx}`}
+                          className="space-y-2"
+                        >
+                          <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
+                            <video
+                              src={video.url}
+                              controls
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {video.filename}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </>
           ) : (
             <Card>

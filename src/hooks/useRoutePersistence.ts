@@ -31,7 +31,8 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
     if (isSessionReady && user && hasRestored.current) {
       const isAppRoute = location.pathname.startsWith("/dashboard") || 
                         location.pathname.startsWith("/account") ||
-                        location.pathname.startsWith("/dataset");
+                        location.pathname.startsWith("/dataset") ||
+                        location.pathname.startsWith("/project");
       
       if (isAppRoute && location.pathname !== "/auth") {
         try {
@@ -41,7 +42,7 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
         }
       }
     }
-  }, [location, isSessionReady, user]);
+  }, [location.pathname, location.search, isSessionReady, user]);
 
   // Restore route after session is ready and user is authenticated (only once)
   useEffect(() => {
@@ -83,7 +84,8 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
         const isSavedRouteValid = 
           savedRoute.startsWith("/dashboard") || 
           savedRoute.startsWith("/account") || 
-          savedRoute.startsWith("/dataset");
+          savedRoute.startsWith("/dataset") ||
+          savedRoute.startsWith("/project");
         
         // Check if current route is a default/landing route that should be replaced
         const isDefaultRoute = 
@@ -95,7 +97,8 @@ export const useRoutePersistence = (isSessionReady: boolean, user: any) => {
         const isCurrentRouteValid = 
           location.pathname.startsWith("/dashboard") || 
           location.pathname.startsWith("/account") || 
-          location.pathname.startsWith("/dataset");
+          location.pathname.startsWith("/dataset") ||
+          location.pathname.startsWith("/project");
         
         // Restore if saved route is valid and different from current
         // This handles all cases:

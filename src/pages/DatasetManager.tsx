@@ -154,6 +154,36 @@ const DatasetManager = () => {
   const [selectedVersionDatasetId, setSelectedVersionDatasetId] = useState<string | null>(null);
   const [fileManifest, setFileManifest] = useState<FileEntry[]>([]);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
+  // Track in-flight thumbnail requests to prevent duplicate fetches
+  const thumbnailFetchInProgressRef = useRef<Map<string, Promise<string | null>>>(new Map());
+  // Ref to access latest cache without recreating callback
+  const thumbnailCacheRef = useRef<Record<string, string>>({});
+  
+  // Request queue and throttling to prevent backend overload
+  const thumbnailQueueRef = useRef<Array<{ resolve: (value: string | null) => void; reject: (error: any) => void; datasetId: string; fileId: string; abortController?: AbortController }>>([]);
+  const activeThumbnailRequestsRef = useRef<number>(0);
+  const MAX_CONCURRENT_THUMBNAILS = 3; // Reduced to 3 concurrent requests to prevent backend overload
+  const THUMBNAIL_LOAD_DELAY_MS = 100; // Small delay before loading to batch rapid scrolls
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    thumbnailCacheRef.current = thumbnailCache;
+  }, [thumbnailCache]);
+
+  // Cleanup: Cancel pending thumbnail requests when dataset changes or component unmounts
+  useEffect(() => {
+    return () => {
+      // Cancel all pending requests in queue
+      thumbnailQueueRef.current.forEach((item) => {
+        if (item.abortController) {
+          item.abortController.abort();
+        }
+        item.reject(new Error('Request cancelled due to dataset change'));
+      });
+      thumbnailQueueRef.current = [];
+      activeThumbnailRequestsRef.current = 0;
+    };
+  }, [selectedVersionDatasetId]); // Cleanup when dataset changes
   
   // File manager view state
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -222,6 +252,67 @@ const DatasetManager = () => {
     const token = session?.access_token;
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   };
+
+  // Process thumbnail queue when slots become available (throttled to prevent backend overload)
+  const processThumbnailQueue = useCallback(() => {
+    while (
+      thumbnailQueueRef.current.length > 0 && 
+      activeThumbnailRequestsRef.current < MAX_CONCURRENT_THUMBNAILS
+    ) {
+      const item = thumbnailQueueRef.current.shift();
+      if (!item) break;
+      
+      activeThumbnailRequestsRef.current++;
+      const cacheKey = `${item.datasetId}:${item.fileId}`;
+      
+      // Create AbortController for this request
+      const abortController = new AbortController();
+      item.abortController = abortController;
+      
+      (async () => {
+        try {
+          const headers = await getAuthHeaders();
+          const url = apiUrl(`/dataset/${encodeURIComponent(item.datasetId)}/file/${encodeURIComponent(item.fileId)}/thumbnail`);
+          const res = await fetch(url, { 
+            method: "GET", 
+            headers,
+            signal: abortController.signal // Support cancellation
+          });
+          
+          // Check if request was aborted
+          if (abortController.signal.aborted) {
+            return;
+          }
+          
+          if (res.status === 404) {
+            setThumbnailCache((s) => ({ ...s, [cacheKey]: null as any }));
+            item.resolve(null);
+          } else if (!res.ok) {
+            throw new Error("thumbnail fetch failed");
+          } else {
+            const blob = await res.blob();
+            const objUrl = URL.createObjectURL(blob);
+            setThumbnailCache((s) => ({ ...s, [cacheKey]: objUrl }));
+            item.resolve(objUrl);
+          }
+        } catch (err: any) {
+          // Don't log or cache aborted requests
+          if (err.name === 'AbortError' || abortController.signal.aborted) {
+            return;
+          }
+          console.warn("fetchThumbnailAsObjectUrl failed:", err);
+          setThumbnailCache((s) => ({ ...s, [cacheKey]: null as any }));
+          item.reject(err);
+        } finally {
+          activeThumbnailRequestsRef.current--;
+          // Process next item in queue with small delay to prevent rapid-fire requests
+          setTimeout(() => {
+            processThumbnailQueue();
+          }, THUMBNAIL_LOAD_DELAY_MS);
+        }
+      })();
+    }
+  }, []);
 
   // ------- Init: load auth + project + company -------
   useEffect(() => {
@@ -517,6 +608,19 @@ const DatasetManager = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyName, project]);
+
+  // Clear version-related state when project changes
+  useEffect(() => {
+    // Clear version selection and details when project changes
+    setSelectedVersionDatasetId(null);
+    setMetadata(null);
+    setFileManifest([]);
+    setSelectedFolder(null);
+    setSelectedFolderInSidebar("all");
+    setSelectedImageFile(null);
+    setSelectedLabelFile(null);
+    setLabelFileContent(null);
+  }, [projectId, project]);
 
   // ------- File manifest pagination & fetch helpers -------
   const fetchFileManifest = async (
@@ -876,17 +980,11 @@ const DatasetManager = () => {
       
       if (labelFile) {
         setSelectedLabelFile(labelFile);
-        // Fetch label file content - try download endpoint first, then regular file endpoint
+        // Fetch label file content
         try {
           const headers = await getAuthHeaders();
-          let url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
-          let res = await fetch(url, { method: "GET", headers });
-          
-          // If download endpoint doesn't exist, try regular file endpoint
-          if (!res.ok) {
-            url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
-            res = await fetch(url, { method: "GET", headers });
-          }
+          const url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(labelFile.id)}`);
+          const res = await fetch(url, { method: "GET", headers });
           
           if (res.ok) {
             const text = await res.text();
@@ -1542,28 +1640,44 @@ const DatasetManager = () => {
   };
 
   // ------- Thumbnail helper: fetch protected thumbnail as blob if needed -------
-  const fetchThumbnailAsObjectUrl = async (datasetId: string, fileId: string) => {
+  const fetchThumbnailAsObjectUrl = useCallback(async (datasetId: string, fileId: string) => {
     const cacheKey = `${datasetId}:${fileId}`;
-    if (thumbnailCache[cacheKey]) return thumbnailCache[cacheKey];
-
-    try {
-      const headers = await getAuthHeaders();
-      const url = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(fileId)}/thumbnail`);
-      const res = await fetch(url, { method: "GET", headers });
-      // Handle 404 gracefully - thumbnail doesn't exist, return null (not an error)
-      if (res.status === 404) {
-        return null;
-      }
-      if (!res.ok) throw new Error("thumbnail fetch failed");
-      const blob = await res.blob();
-      const objUrl = URL.createObjectURL(blob);
-      setThumbnailCache((s) => ({ ...s, [cacheKey]: objUrl }));
-      return objUrl;
-    } catch (err) {
-      console.warn("fetchThumbnailAsObjectUrl failed:", err);
-      return null;
+    
+    // Check cache first (includes both successes and failures - failures are cached as null)
+    // Use ref to access latest cache without recreating callback on every cache update
+    const cached = thumbnailCacheRef.current[cacheKey];
+    if (cached !== undefined) {
+      return cached; // Returns string URL or null (for cached failures)
     }
-  };
+
+    // Check if a request for this thumbnail is already in-flight
+    const inFlight = thumbnailFetchInProgressRef.current.get(cacheKey);
+    if (inFlight) {
+      return inFlight; // Return existing promise to prevent duplicate requests
+    }
+
+    // Create a promise that will be resolved when the queue processes this request
+    const fetchPromise = new Promise<string | null>((resolve, reject) => {
+      // Add to queue with AbortController for cancellation support
+      const abortController = new AbortController();
+      thumbnailQueueRef.current.push({ resolve, reject, datasetId, fileId, abortController });
+      
+      // Delay processing slightly to batch rapid requests (debounce)
+      setTimeout(() => {
+        processThumbnailQueue();
+      }, THUMBNAIL_LOAD_DELAY_MS);
+    });
+
+    // Track in-flight request
+    thumbnailFetchInProgressRef.current.set(cacheKey, fetchPromise);
+    
+    // Clean up tracking when promise resolves/rejects
+    fetchPromise.finally(() => {
+      thumbnailFetchInProgressRef.current.delete(cacheKey);
+    });
+    
+    return fetchPromise;
+  }, [processThumbnailQueue]); // Include processThumbnailQueue in deps
 
   // Group files by folder for display
   const groupedFiles = useMemo(() => {
@@ -1628,21 +1742,26 @@ const DatasetManager = () => {
   }) => {
     const [imgSrc, setImgSrc] = useState<string | null>(null);
     const [shouldLoad, setShouldLoad] = useState(false);
+    const [hasErrored, setHasErrored] = useState(false);
     const imgRef = useRef<HTMLImageElement>(null);
 
     useEffect(() => {
       // Use IntersectionObserver to detect when element is in viewport
+      // Reduced rootMargin to be less aggressive and prevent too many simultaneous requests
       const observer = new IntersectionObserver(
         (entries) => {
           entries.forEach((entry) => {
             if (entry.isIntersecting) {
-              setShouldLoad(true);
+              // Small delay before loading to batch rapid scrolls (100ms debounce)
+              setTimeout(() => {
+                setShouldLoad(true);
+              }, 100);
               observer.disconnect();
             }
           });
         },
         { 
-          rootMargin: '100px', // Start loading 100px before entering viewport
+          rootMargin: '50px', // Reduced from 100px - only load when closer to viewport
           threshold: 0.01
         }
       );
@@ -1652,10 +1771,10 @@ const DatasetManager = () => {
         observer.observe(currentRef);
       }
 
-      // Fallback: if observer doesn't trigger within 2 seconds, load anyway
+      // Fallback: if observer doesn't trigger within 5 seconds, load anyway (increased from 2s)
       const fallbackTimer = setTimeout(() => {
         setShouldLoad(true);
-      }, 2000);
+      }, 5000);
 
       return () => {
         observer.disconnect();
@@ -1664,10 +1783,11 @@ const DatasetManager = () => {
     }, []);
 
     useEffect(() => {
-      if (shouldLoad && !imgSrc) {
+      // Only set imgSrc if shouldLoad is true, imgSrc is not set, and we haven't errored
+      if (shouldLoad && !imgSrc && !hasErrored) {
         setImgSrc(thumbEndpoint);
       }
-    }, [shouldLoad, thumbEndpoint, imgSrc]);
+    }, [shouldLoad, thumbEndpoint, imgSrc, hasErrored]);
 
     return (
       <img
@@ -1678,12 +1798,18 @@ const DatasetManager = () => {
         onClick={onClick}
         loading="lazy"
         onError={async (e) => {
-          if (imgSrc === thumbEndpoint) {
+          // Only attempt fallback if we haven't errored before and imgSrc matches thumbEndpoint
+          if (!hasErrored && imgSrc === thumbEndpoint) {
+            setHasErrored(true); // Mark as errored to prevent retries
             const objUrl = await fetchThumbnailAsObjectUrl(datasetId, fileId);
             if (objUrl) {
-              setImgSrc(objUrl);
+              setImgSrc(objUrl); // Update React state
+              setHasErrored(false); // Reset error flag if fallback succeeds
             } else {
-              (e.target as HTMLImageElement).src = "/placeholder-image.png";
+              // Both attempts failed - set placeholder in both React state and DOM
+              const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='32'%3E%3Crect width='48' height='32' fill='%23f3f4f6'/%3E%3C/svg%3E";
+              setImgSrc(placeholder); // Update React state to prevent re-render resets
+              (e.target as HTMLImageElement).src = placeholder; // Update DOM immediately
               (e.target as HTMLImageElement).style.opacity = "0.5";
             }
           }
