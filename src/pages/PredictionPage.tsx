@@ -216,6 +216,8 @@ interface LiveFrameResponse {
   }>;
   totalDetections: number;
   processingTime?: number;
+  imageWidth?: number; // Original image width sent to backend
+  imageHeight?: number; // Original image height sent to backend
 }
 
 const STORAGE_PREFIX = "prediction_";
@@ -1051,47 +1053,127 @@ const PredictionPage = () => {
         timestamp: new Date().toISOString()
       });
 
+      // Treat successful live frame processing as user activity for inactivity tracking
+      try {
+        sessionStorage.setItem("visionm_last_user_activity", Date.now().toString());
+      } catch {
+        // Ignore storage errors
+      }
+
       // Draw detections on overlay canvas
       const canvas = annotatedCanvasRef.current;
       const video = videoRef.current;
       if (canvas && video) {
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          // Sync canvas size with video
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+          // ✅ Get container dimensions (entire visible area)
+          const containerWidth = video.clientWidth;
+          const containerHeight = video.clientHeight;
+
+          // ✅ Get actual video stream dimensions (not the captured frame size)
+          const videoWidth = video.videoWidth;
+          const videoHeight = video.videoHeight;
+
+          // ✅ Calculate object-contain scaling
+          // object-contain scales to fit while maintaining aspect ratio
+          // It uses the smaller scale factor to ensure entire video fits
+          const scale = Math.min(containerWidth / videoWidth, containerHeight / videoHeight);
+
+          // ✅ Calculate actual displayed video dimensions (excluding letterbox/pillarbox)
+          const displayedVideoWidth = videoWidth * scale;
+          const displayedVideoHeight = videoHeight * scale;
+
+          // ✅ Calculate offset to center video in container (letterbox/pillarbox)
+          const offsetX = (containerWidth - displayedVideoWidth) / 2;
+          const offsetY = (containerHeight - displayedVideoHeight) / 2;
+
+          // ✅ Set canvas size to container size (canvas covers entire container including black bars)
+          if (containerWidth > 0 && containerHeight > 0) {
+            canvas.width = containerWidth;
+            canvas.height = containerHeight;
           }
 
           // Clear previous annotations
           ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          const detections = data.detections || [];
-          detections.forEach((det) => {
-            const [x1, y1, x2, y2] = det.bbox;
-            const width = x2 - x1;
-            const height = y2 - y1;
-            const label = `${det.class} ${(det.confidence * 100).toFixed(0)}%`;
+          // ✅ Get original image dimensions from API response
+          // Should be 640x480 (the size sent to backend)
+          const imageWidth = data.imageWidth || 640;
+          const imageHeight = data.imageHeight || 480;
 
-            // Draw bounding box
-            ctx.strokeStyle = "#00FF00";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x1, y1, width, height);
+          // Safety checks for valid dimensions
+          if (imageWidth > 0 && imageHeight > 0 && videoWidth > 0 && videoHeight > 0) {
+            // ✅ Scale from original image (640x480) to displayed video area (not container!)
+            const scaleX = displayedVideoWidth / imageWidth;
+            const scaleY = displayedVideoHeight / imageHeight;
 
-            // Draw label background
-            ctx.font = "bold 14px Arial";
-            const textMetrics = ctx.measureText(label);
-            const labelWidth = textMetrics.width + 10;
-            const labelHeight = 20;
-            const labelY = Math.max(0, y1 - labelHeight);
+            const detections = data.detections || [];
+            detections.forEach((det) => {
+              const [x1, y1, x2, y2] = det.bbox;
+              
+              // ✅ Scale coordinates to displayed video area, then add offset for letterboxing/pillarboxing
+              const scaledX1 = (x1 * scaleX) + offsetX;
+              const scaledY1 = (y1 * scaleY) + offsetY;
+              const scaledX2 = (x2 * scaleX) + offsetX;
+              const scaledY2 = (y2 * scaleY) + offsetY;
 
-            ctx.fillStyle = "rgba(0,255,0,0.7)";
-            ctx.fillRect(x1, labelY, labelWidth, labelHeight);
+              const width = scaledX2 - scaledX1;
+              const height = scaledY2 - scaledY1;
+              const label = `${det.class} ${(det.confidence * 100).toFixed(0)}%`;
 
-            // Draw label text
-            ctx.fillStyle = "#000000";
-            ctx.fillText(label, x1 + 5, labelY + labelHeight - 6);
-          });
+              // Draw bounding box using scaled and offset coordinates
+              ctx.strokeStyle = "#00FF00";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(scaledX1, scaledY1, width, height);
+
+              // Draw label background using scaled and offset coordinates
+              ctx.font = "bold 14px Arial";
+              const textMetrics = ctx.measureText(label);
+              const labelWidth = textMetrics.width + 10;
+              const labelHeight = 20;
+              const labelY = Math.max(offsetY, scaledY1 - labelHeight); // ✅ Ensure label doesn't go above video area
+
+              ctx.fillStyle = "rgba(0,255,0,0.7)";
+              ctx.fillRect(scaledX1, labelY, labelWidth, labelHeight);
+
+              ctx.fillStyle = "#000000";
+              ctx.fillText(label, scaledX1 + 5, labelY + labelHeight - 6);
+            });
+          } else {
+            // Fallback: use coordinates as-is if dimensions invalid (backward compatibility)
+            console.warn("Invalid dimensions, using coordinates as-is", {
+              imageWidth,
+              imageHeight,
+              videoWidth: video.videoWidth,
+              videoHeight: video.videoHeight,
+              containerWidth,
+              containerHeight
+            });
+
+            const detections = data.detections || [];
+            detections.forEach((det) => {
+              const [x1, y1, x2, y2] = det.bbox;
+              const width = x2 - x1;
+              const height = y2 - y1;
+              const label = `${det.class} ${(det.confidence * 100).toFixed(0)}%`;
+
+              ctx.strokeStyle = "#00FF00";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(x1, y1, width, height);
+
+              ctx.font = "bold 14px Arial";
+              const textMetrics = ctx.measureText(label);
+              const labelWidth = textMetrics.width + 10;
+              const labelHeight = 20;
+              const labelY = Math.max(0, y1 - labelHeight);
+
+              ctx.fillStyle = "rgba(0,255,0,0.7)";
+              ctx.fillRect(x1, labelY, labelWidth, labelHeight);
+
+              ctx.fillStyle = "#000000";
+              ctx.fillText(label, x1 + 5, labelY + labelHeight - 6);
+            });
+          }
         }
       }
       

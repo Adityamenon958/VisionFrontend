@@ -10,7 +10,7 @@ import { useRoutePersistence } from "@/hooks/useRoutePersistence";
 import { useToast } from "@/hooks/use-toast";
 
 // Constants for inactivity tracking
-const INACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+const INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_IDLE_DURATION_MS = 5 * 60 * 1000; // Minimum 5 minutes to prevent false positives
 const MAX_IDLE_DURATION_MS = 24 * 60 * 60 * 1000; // Maximum 24 hours to ignore stale timestamps
 const LAST_HIDDEN_STORAGE_KEY = "visionm_last_tab_hidden";
@@ -71,46 +71,49 @@ const AppShellContent = () => {
     const updateActivityTime = () => {
       try {
         sessionStorage.setItem(ACTIVITY_TIME_KEY, Date.now().toString());
+        // Allow future refreshes after new activity
+        sessionStorage.setItem(HAS_REFRESHED_STORAGE_KEY, "false");
       } catch (error) {
         // Ignore storage errors
       }
     };
 
-    // Listen to user activity events (throttled to avoid excessive writes)
-    let activityThrottleTimeout: NodeJS.Timeout | null = null;
-    const throttledUpdateActivity = () => {
-      if (activityThrottleTimeout) return;
+    // Any user interaction should reset inactivity and cancel pending refresh
+    const handleUserActivity = () => {
       updateActivityTime();
-      activityThrottleTimeout = setTimeout(() => {
-        activityThrottleTimeout = null;
-      }, 5000); // Update at most once every 5 seconds
+      // Cancel any scheduled refresh when user is actively interacting
+      if (visibilityChangeTimeoutRef.current) {
+        clearTimeout(visibilityChangeTimeoutRef.current);
+        visibilityChangeTimeoutRef.current = null;
+      }
     };
 
     const activityEvents = ['mousedown', 'mousemove', 'keydown', 'keypress', 'scroll', 'touchstart', 'click', 'focus'];
     activityEvents.forEach(event => {
-      document.addEventListener(event, throttledUpdateActivity, { passive: true });
+      document.addEventListener(event, handleUserActivity, { passive: true });
     });
 
-    // Check for inactivity periodically (every 1 minute)
-    const inactivityCheckInterval = setInterval(() => {
+    // When the tab becomes visible again, check if we've been idle long enough
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
       try {
-        // Skip if already refreshed
         const refreshedFlag = sessionStorage.getItem(HAS_REFRESHED_STORAGE_KEY);
         if (refreshedFlag === "true") {
           return;
         }
 
-        // Get last activity time
         const lastActivityStr = sessionStorage.getItem(ACTIVITY_TIME_KEY);
         if (!lastActivityStr) {
-          // No activity recorded, initialize it
           sessionStorage.setItem(ACTIVITY_TIME_KEY, Date.now().toString());
           return;
         }
 
         const lastActivityTime = parseInt(lastActivityStr, 10);
         const pageLoadTimestamp = sessionStorage.getItem(PAGE_LOAD_TIME_KEY);
-        
+
         // Ignore if timestamp is from previous session
         if (pageLoadTimestamp && lastActivityTime < parseInt(pageLoadTimestamp, 10)) {
           sessionStorage.setItem(ACTIVITY_TIME_KEY, Date.now().toString());
@@ -118,38 +121,66 @@ const AppShellContent = () => {
         }
 
         const inactivityDuration = Date.now() - lastActivityTime;
-        const inactivityMinutes = Math.round(inactivityDuration / 1000 / 60);
 
-        // Only refresh if user has been inactive for 10+ minutes
-        // AND tab is currently visible (user might be back)
+        // Only consider refresh after a long idle window
         if (
-          inactivityDuration >= INACTIVITY_THRESHOLD_MS &&
-          inactivityDuration <= MAX_IDLE_DURATION_MS &&
-          !document.hidden
+          inactivityDuration < INACTIVITY_THRESHOLD_MS ||
+          inactivityDuration > MAX_IDLE_DURATION_MS
         ) {
-          console.log("[AppShell] REFRESH TRIGGERED - User inactive for", inactivityMinutes, "minutes");
-          
-          // Mark as refreshed
-          sessionStorage.setItem(HAS_REFRESHED_STORAGE_KEY, "true");
-          
-          // Small delay to ensure storage is written
-          setTimeout(() => {
-            window.location.reload();
-          }, 100);
+          return;
         }
+
+        // Schedule a controlled refresh after a short grace period.
+        // Any user activity during this window cancels the refresh.
+        if (visibilityChangeTimeoutRef.current) {
+          clearTimeout(visibilityChangeTimeoutRef.current);
+        }
+
+        visibilityChangeTimeoutRef.current = setTimeout(() => {
+          try {
+            const refreshed = sessionStorage.getItem(HAS_REFRESHED_STORAGE_KEY);
+            if (refreshed === "true") {
+              return;
+            }
+
+            const latestActivityStr = sessionStorage.getItem(ACTIVITY_TIME_KEY);
+            if (!latestActivityStr) return;
+
+            const latestActivityTime = parseInt(latestActivityStr, 10);
+            const latestInactivity = Date.now() - latestActivityTime;
+
+            // If there has been recent activity since scheduling, skip refresh
+            if (
+              latestInactivity < INACTIVITY_THRESHOLD_MS ||
+              latestInactivity > MAX_IDLE_DURATION_MS
+            ) {
+              return;
+            }
+
+            console.log("[AppShell] REFRESH TRIGGERED after long inactivity (visibilitychange)");
+            sessionStorage.setItem(HAS_REFRESHED_STORAGE_KEY, "true");
+            window.location.reload();
+          } catch (error) {
+            console.error("[AppShell] Error during inactivity refresh:", error);
+          } finally {
+            visibilityChangeTimeoutRef.current = null;
+          }
+        }, 5000); // 5s grace period
       } catch (error) {
-        console.error("[AppShell] Error in inactivity check:", error);
+        console.error("[AppShell] Error in visibility change handler:", error);
       }
-    }, 60 * 1000); // Check every 1 minute
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      clearInterval(inactivityCheckInterval);
-      if (activityThrottleTimeout) {
-        clearTimeout(activityThrottleTimeout);
+      if (visibilityChangeTimeoutRef.current) {
+        clearTimeout(visibilityChangeTimeoutRef.current);
       }
       activityEvents.forEach(event => {
-        document.removeEventListener(event, throttledUpdateActivity);
+        document.removeEventListener(event, handleUserActivity);
       });
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []); // Constants are defined outside component, no need to include them
 

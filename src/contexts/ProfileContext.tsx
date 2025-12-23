@@ -236,6 +236,13 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           error: sessionError,
         } = await supabase.auth.getSession();
 
+        if (isDev) {
+          console.log("[ProfileContext] hydrateSession getSession:", {
+            hasSession: !!session,
+            sessionError,
+          });
+        }
+
         if (sessionError) throw sessionError;
 
         if (!mounted) return;
@@ -296,20 +303,61 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
 
+      if (isDev) {
+        console.log("[ProfileContext] onAuthStateChange:", {
+          event,
+          hasSession: !!session,
+          time: new Date().toISOString(),
+        });
+      }
+
       if (event === "SIGNED_OUT" || !session) {
-        setUser(null);
-        setProfile(null);
-        setCompany(null);
-        setIsAdmin(false);
-        setSessionReady(true);
-        setLoading(false);
-        // Clear route persistence on logout
-        clearLastRoute();
+        // Distinguish explicit user sign-out from auto sign-out (e.g., refresh-token failure)
+        let explicitSignOut = false;
+        try {
+          explicitSignOut =
+            sessionStorage.getItem("VISIONM_EXPLICIT_SIGNOUT") === "true";
+        } catch {
+          // Ignore storage errors and treat as non-explicit
+        }
+
+        if (explicitSignOut) {
+          // Clear marker so future sign-ins work normally
+          try {
+            sessionStorage.removeItem("VISIONM_EXPLICIT_SIGNOUT");
+          } catch {
+            // ignore
+          }
+
+          // Hard reset on explicit logout (existing behavior)
+          setUser(null);
+          setProfile(null);
+          setCompany(null);
+          setIsAdmin(false);
+          setSessionReady(true);
+          setLoading(false);
+          // Clear route persistence on logout
+          clearLastRoute();
+        } else {
+          // Graceful handling for auto sign-out / refresh-token failures
+          // Keep route and avoid full app reset; prompt user to sign in again.
+          setUser(null);
+          setSessionReady(true);
+          setLoading(false);
+          setError("Your session expired. Please sign in again.");
+        }
       } else if (
         event === "SIGNED_IN" ||
         event === "TOKEN_REFRESHED" ||
         event === "USER_UPDATED"
       ) {
+        // Clear explicit sign-out marker on any successful session
+        try {
+          sessionStorage.removeItem("VISIONM_EXPLICIT_SIGNOUT");
+        } catch {
+          // ignore
+        }
+
         setUser(session.user);
         // Don't set sessionReady until loadProfile completes
         try {

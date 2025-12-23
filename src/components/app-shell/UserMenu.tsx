@@ -34,6 +34,11 @@ export const UserMenu: React.FC = () => {
 
   const handleSignOut = async () => {
     try {
+      try {
+        sessionStorage.setItem("VISIONM_EXPLICIT_SIGNOUT", "true");
+      } catch {
+        // Ignore storage errors; sign-out will still proceed
+      }
       await supabase.auth.signOut();
       navigate("/auth");
     } catch (error) {
