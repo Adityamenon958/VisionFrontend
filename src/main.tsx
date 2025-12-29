@@ -4,6 +4,21 @@ import App from "./App.tsx";
 import "./index.css";
 import { Toaster } from "@/components/ui/toaster";
 
+// Initialize theme on app startup
+const initTheme = () => {
+  if (typeof window === "undefined") return;
+  const stored = localStorage.getItem("visionm-theme");
+  const theme = stored === "dark" ? "dark" : "light";
+  const root = document.documentElement;
+  if (theme === "dark") {
+    root.classList.add("dark");
+  } else {
+    root.classList.remove("dark");
+  }
+};
+
+initTheme();
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />

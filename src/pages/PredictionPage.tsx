@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useProfile } from "@/hooks/useProfile";
+import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/pages/PageHeader";
 import {
@@ -279,6 +280,7 @@ const PredictionPage = () => {
   const { profile, company, sessionReady } = useProfile();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { setItems: setBreadcrumbs } = useBreadcrumbs();
 
   // State
   const [projects, setProjects] = useState<any[]>([]);
@@ -340,6 +342,21 @@ const PredictionPage = () => {
   // Live camera inference state
   const [liveCameraMode, setLiveCameraMode] = useState<boolean>(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+
+  // Set breadcrumbs
+  useEffect(() => {
+    const breadcrumbItems = [
+      { label: "Dashboard", href: "/dashboard" },
+      { label: "Projects", href: "/dashboard/projects" },
+      { label: "Prediction" },
+    ];
+
+    setBreadcrumbs(breadcrumbItems);
+
+    return () => {
+      setBreadcrumbs(null);
+    };
+  }, [setBreadcrumbs]);
   const [cameraPermission, setCameraPermission] = useState<'idle' | 'requesting' | 'granted' | 'denied'>('idle');
   const [liveInferenceId, setLiveInferenceId] = useState<string | null>(null);
   const [isLiveInferenceRunning, setIsLiveInferenceRunning] = useState<boolean>(false);

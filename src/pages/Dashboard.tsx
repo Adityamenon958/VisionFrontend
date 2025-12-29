@@ -33,6 +33,7 @@ import { FolderKanban } from "lucide-react";
 import ProfileCompletionDialog from "@/components/ProfileCompletionDialog";
 import { SimulationView } from "@/components/SimulationView";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
+import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
 
 type ViewMode = "overview" | "projects" | "simulation" | "members";
 
@@ -979,6 +980,15 @@ const Dashboard = () => {
               setShowCompanyDialog(true);
             },
           }}
+        />
+      )}
+
+      {/* Dashboard Overview - shown when user has a company */}
+      {activeView === "overview" && profile?.company_id && (
+        <DashboardOverview 
+          projects={projects}
+          profile={profile}
+          onCreateProject={openCreateProject}
         />
       )}
 

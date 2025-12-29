@@ -2,11 +2,13 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Building2, Menu } from "lucide-react";
+import { Bell, Building2, Menu, CheckCircle2, XCircle, Sun, Moon } from "lucide-react";
 import { UserMenu } from "./UserMenu";
 import { JoinCompanyDialog } from "@/components/JoinCompanyDialog";
 import { JoinRequestsSidePanel } from "@/components/JoinRequestsSidePanel";
 import { useProfile } from "@/hooks/useProfile";
+import { useBackendStatus } from "@/hooks/useBackendStatus";
+import { useTheme } from "@/hooks/useTheme";
 import { supabase } from "@/integrations/supabase/client";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { AppSidebar } from "./AppSidebar";
@@ -15,6 +17,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 export const AppHeader: React.FC = () => {
   const navigate = useNavigate();
   const { profile, isAdmin, company, loading, sessionReady } = useProfile();
+  const { isOnline, isLoading: backendStatusLoading } = useBackendStatus();
+  const { theme, toggleTheme } = useTheme();
   const [pendingRequestCount, setPendingRequestCount] = useState(0);
   const [showRequestsPanel, setShowRequestsPanel] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -74,14 +78,27 @@ export const AppHeader: React.FC = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 transition-colors duration-300 ease-in-out shadow-sm dark:shadow-none">
         <div className="container flex h-16 items-center justify-between px-4">
           {/* Left: Mobile Menu + Logo */}
           <div className="flex items-center gap-2">
+            {/* Mobile Menu Sheet */}
             {isMobile && (
               <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
                 <SheetTrigger asChild>
-                  <Button variant="ghost" size="icon">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setMobileMenuOpen(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setMobileMenuOpen(true);
+                      }
+                    }}
+                    aria-label="Open menu"
+                    aria-expanded={mobileMenuOpen}
+                  >
                     <Menu className="h-5 w-5" />
                   </Button>
                 </SheetTrigger>
@@ -90,6 +107,7 @@ export const AppHeader: React.FC = () => {
                 </SheetContent>
               </Sheet>
             )}
+
             <div
               className="flex items-center gap-2 cursor-pointer"
               onClick={() => navigate("/dashboard")}
@@ -102,6 +120,31 @@ export const AppHeader: React.FC = () => {
                 </span>
               )}
             </div>
+          </div>
+
+          {/* Center: Backend Status Indicator */}
+          <div className="hidden md:flex items-center gap-4" role="status" aria-live="polite">
+            {!backendStatusLoading && (
+              <div className="flex items-center gap-1.5">
+                {isOnline ? (
+                  <span 
+                    className="flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400"
+                    aria-label="Backend status: Online"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Backend: Online</span>
+                  </span>
+                ) : (
+                  <span 
+                    className="flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400"
+                    aria-label="Backend status: Offline"
+                  >
+                    <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Backend: Offline</span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right: Actions */}
@@ -119,29 +162,47 @@ export const AppHeader: React.FC = () => {
               </>
             )}
 
-            {/* Notification Bell Icon - Admin Only */}
-            {sessionReady && !loading && isAdmin && profile?.email && (
+            {/* Icon Group */}
+            <div className="flex items-center gap-1 bg-muted/30 dark:bg-muted/20 rounded-lg px-2 py-1">
+              {/* Theme Toggle */}
               <Button
                 variant="ghost"
                 size="icon"
-                className="relative"
-                onClick={() => setShowRequestsPanel(true)}
-                title="Join Requests"
+                onClick={toggleTheme}
+                className="hover:bg-muted rounded-full"
+                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               >
-                <Bell className="h-5 w-5" />
-                {pendingRequestCount > 0 && (
-                  <Badge
-                    variant="destructive"
-                    className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs"
-                  >
-                    {pendingRequestCount}
-                  </Badge>
+                {theme === "dark" ? (
+                  <Sun className="h-5 w-5" />
+                ) : (
+                  <Moon className="h-5 w-5" />
                 )}
               </Button>
-            )}
 
-            {/* User Menu */}
-            <UserMenu />
+              {/* Notification Bell Icon - Admin Only */}
+              {sessionReady && !loading && isAdmin && profile?.email && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="relative hover:bg-muted rounded-full"
+                  onClick={() => setShowRequestsPanel(true)}
+                  title="Join Requests"
+                >
+                  <Bell className="h-5 w-5" />
+                  {pendingRequestCount > 0 && (
+                    <Badge
+                      variant="destructive"
+                      className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs"
+                    >
+                      {pendingRequestCount}
+                    </Badge>
+                  )}
+                </Button>
+              )}
+
+              {/* User Menu */}
+              <UserMenu />
+            </div>
           </div>
         </div>
       </header>

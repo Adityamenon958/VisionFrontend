@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { List, X, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown, Trash2, Loader2 } from "lucide-react";
+import { List, X, FileText, Search, ZoomIn, ZoomOut, RotateCcw, Maximize2, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, Folder, ChevronRight as ChevronRightIcon, ChevronDown, Trash2, Loader2, Upload, ArrowRight } from "lucide-react";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 import { cn } from "@/lib/utils";
 import {
@@ -156,6 +156,8 @@ const DatasetManager = () => {
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
   // Track in-flight thumbnail requests to prevent duplicate fetches
   const thumbnailFetchInProgressRef = useRef<Map<string, Promise<string | null>>>(new Map());
+  // Ref for upload section to scroll to
+  const uploadSectionRef = useRef<HTMLDivElement>(null);
   // Ref to access latest cache without recreating callback
   const thumbnailCacheRef = useRef<Record<string, string>>({});
   
@@ -382,7 +384,6 @@ const DatasetManager = () => {
     const breadcrumbItems = [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Projects", href: "/dashboard/projects" },
-      { label: "Manage Projects", href: "/dashboard/projects" },
       { label: displayProjectName || "Project", href: projectId ? `/dataset/${projectId}` : undefined },
       { label: "Upload dataset" },
     ];
@@ -1229,6 +1230,18 @@ const DatasetManager = () => {
     [toast],
   );
 
+  // ------- Scroll to upload section handler -------
+  const handleScrollToUpload = () => {
+    if (uploadSectionRef.current) {
+      uploadSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Open the labelled data card after a short delay
+      setTimeout(() => {
+        setLabelledOpen(true);
+        setUnlabelledOpen(false);
+      }, 300);
+    }
+  };
+
   // ------- Upload handler (POST /dataset/upload) -------
   const handleUpload = async () => {
     const trimmedVersion = version.trim();
@@ -1949,7 +1962,7 @@ const DatasetManager = () => {
   // ------- Render -------
   return (
     <div>
-      <div className="mb-6">
+      <div ref={uploadSectionRef} className="mb-6">
         <div>
           <h2 className="text-2xl font-bold">Upload dataset for {displayProjectName}</h2>
           {companyName && <p className="text-sm text-muted-foreground">{companyName}</p>}
@@ -2132,7 +2145,16 @@ const DatasetManager = () => {
             </CardHeader>
             <CardContent className="space-y-2">
                   {versions.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">No versions yet.</div>
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <div className="relative flex-shrink-0 mb-4">
+                        <Folder className="h-20 w-20 text-blue-500 dark:text-blue-400" strokeWidth={1.5} />
+                        <div className="absolute -bottom-1 -right-1 h-7 w-7 rounded-full bg-blue-500 dark:bg-blue-400 flex items-center justify-center shadow-lg">
+                          <Upload className="h-4 w-4 text-white" strokeWidth={2.5} />
+                        </div>
+                      </div>
+                      <p className="text-lg font-semibold text-foreground mb-1">No versions yet</p>
+                      <p className="text-sm text-muted-foreground">Upload a dataset to create your first version</p>
+                    </div>
                   ) : (
                     <div className="space-y-1">
                       {versions.map((v) => (

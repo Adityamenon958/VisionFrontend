@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/dialog";
 import { InviteUserDialog } from "@/components/InviteUserDialog";
 import { useProfile } from "@/hooks/useProfile";
+import { useSidebar } from "./sidebar-context";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   LayoutDashboard,
   FolderKanban,
@@ -21,6 +23,7 @@ import {
   FileText,
   Cpu,
   BrainCircuit,
+  Menu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -35,6 +38,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
   const location = useLocation();
   const { profile, isAdmin, company, loading: profileLoading } = useProfile();
   const { toast } = useToast();
+  const { isOpen, toggleSidebar } = useSidebar();
+  const isMobile = useIsMobile();
   
   // Debug admin status in development (only when profile loading is complete)
   useEffect(() => {
@@ -177,199 +182,250 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
       : []),
   ];
 
+
   return (
     <>
-      <aside className="hidden md:block w-64 border-r bg-background min-h-[calc(100vh-4rem)]">
-        <nav className="p-4 space-y-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const hasChildren = item.children && item.children.length > 0;
-            const isProjectsExpanded = projectsOpen && item.label === "Projects";
-            const isTeamExpanded = teamOpen && item.label === "Team";
+      <aside className={cn(
+        "border-r min-h-[calc(100vh-4rem)] h-full",
+        "transition-all duration-300 ease-in-out transition-colors",
+        "bg-background dark:bg-background",
+        "bg-slate-50/50",
+        isOpen ? "w-64" : "w-12"
+      )}>
+        <nav className="p-4 space-y-1 h-full flex flex-col">
+          {/* Sidebar Toggle Button - Above Overview */}
+          {!isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "mb-2 transition-all duration-200 flex-shrink-0",
+                isOpen ? "w-full justify-start" : "w-full justify-center"
+              )}
+              onClick={(e) => {
+                e.preventDefault();
+                toggleSidebar();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggleSidebar();
+                }
+              }}
+              aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
+              aria-expanded={isOpen}
+            >
+              <Menu className="h-5 w-5" />
+              {isOpen && <span className="ml-2">Menu</span>}
+            </Button>
+          )}
 
-            return (
-              <div key={item.label}>
-                <Button
-                  variant={item.active ? "secondary" : "ghost"}
-                  className={cn(
-                    "w-full justify-start",
-                    item.active && "bg-secondary"
-                  )}
-                  onClick={() => {
-                    if (item.label === "Projects") {
-                      setProjectsOpen(!projectsOpen);
-                      if (projectsOpen) setManageOpen(false);
-                    } else if (item.label === "Team") {
-                      setTeamOpen(!teamOpen);
-                    } else if (!hasChildren) {
-                      navigate(item.href);
-                      onNavigate?.();
-                    }
-                  }}
-                >
-                  <Icon className="mr-2 h-4 w-4" />
-                  {item.label}
-                  {hasChildren && (
-                    <span className="ml-auto">
-                      {(isProjectsExpanded || isTeamExpanded) ? (
-                        <ChevronDown className="h-4 w-4" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4" />
-                      )}
-                    </span>
-                  )}
-                </Button>
+          <div className={cn("flex-1 overflow-y-auto", !isOpen && !isMobile && "hidden")}>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const hasChildren = item.children && item.children.length > 0;
+              const isProjectsExpanded = projectsOpen && item.label === "Projects";
+              const isTeamExpanded = teamOpen && item.label === "Team";
 
-                {/* Team submenu */}
-                {item.label === "Team" && isTeamExpanded && (
-                  <div className="ml-6 mt-1 space-y-1">
-                    {item.children?.map((child) => (
-                      <Button
-                        key={child.href}
-                        variant="ghost"
-                        size="sm"
-                        className={cn(
-                          "w-full justify-start",
-                          child.active && "bg-secondary"
-                        )}
-                        onClick={() => {
-                          navigate(child.href!);
-                          onNavigate?.();
-                        }}
-                      >
-                        {child.label}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Projects submenu */}
-                {item.label === "Projects" && isProjectsExpanded && (
-                  <div className="ml-6 mt-1 space-y-1">
-                    <div className="relative">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start"
-                      onClick={handleCreateProject}
-                      disabled={!companyId}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create Project
-                    </Button>
-                      {!companyId && (
-                        <div
-                          className="absolute inset-0 cursor-not-allowed"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            toast({
-                              title: "Company required",
-                              description: "Please create or join a company before creating a project.",
-                              variant: "destructive",
-                            });
-                          }}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                          }}
-                        />
-                      )}
-                    </div>
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start"
-                      onClick={() => setManageOpen(!manageOpen)}
-                    >
-                      <FileText className="mr-2 h-4 w-4" />
-                      Manage Projects
+              return (
+                <div key={item.label}>
+                  <Button
+                    variant={item.active ? "secondary" : "ghost"}
+                    className={cn(
+                      "w-full justify-start transition-all duration-200",
+                      item.active && cn(
+                        "bg-primary/10 dark:bg-primary/20",
+                        "bg-primary/15",
+                        "border-l-2 border-l-primary"
+                      )
+                    )}
+                    onClick={() => {
+                      if (item.label === "Projects") {
+                        setProjectsOpen(!projectsOpen);
+                        if (projectsOpen) setManageOpen(false);
+                      } else if (item.label === "Team") {
+                        setTeamOpen(!teamOpen);
+                      } else if (!hasChildren) {
+                        navigate(item.href);
+                        onNavigate?.();
+                      }
+                    }}
+                  >
+                    <Icon className="h-4 w-4 flex-shrink-0 mr-2" />
+                    <span>{item.label}</span>
+                    {hasChildren && (
                       <span className="ml-auto">
-                        {manageOpen ? (
+                        {(isProjectsExpanded || isTeamExpanded) ? (
                           <ChevronDown className="h-4 w-4" />
                         ) : (
                           <ChevronRight className="h-4 w-4" />
                         )}
                       </span>
-                    </Button>
-
-                    {manageOpen && (
-                      <div className="ml-4 mt-1 space-y-1 max-h-60 overflow-auto">
-                        {loadingProjects && (
-                          <div className="px-4 py-2 text-xs text-muted-foreground">
-                            Loading...
-                          </div>
-                        )}
-
-                        {!loadingProjects && projects.length === 0 && (
-                          <div className="px-4 py-2 text-xs text-muted-foreground">
-                            No projects yet
-                          </div>
-                        )}
-
-                        {!loadingProjects &&
-                          projects.map((p) => (
-                            <Button
-                              key={p.id}
-                              variant="ghost"
-                              size="sm"
-                              className={cn(
-                                "w-full justify-start",
-                                location.pathname === `/dataset/${p.id}` &&
-                                  "bg-secondary"
-                              )}
-                              onClick={() => {
-                                openProject(p.id);
-                                onNavigate?.();
-                              }}
-                            >
-                              <span className="truncate">{p.name}</span>
-                            </Button>
-                          ))}
-                      </div>
                     )}
+                  </Button>
 
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start"
-                      onClick={handleSimulation}
-                    >
-                      <Cpu className="mr-2 h-4 w-4" />
-                      Simulation
-                    </Button>
+                  {/* Team submenu */}
+                  {item.label === "Team" && isTeamExpanded && (
+                    <div className="ml-6 mt-1 space-y-1">
+                      {item.children?.map((child) => (
+                        <Button
+                          key={child.href}
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "w-full justify-start",
+                            child.active && cn(
+                              "bg-primary/10 dark:bg-primary/20",
+                              "bg-primary/15",
+                              "border-l-2 border-l-primary"
+                            )
+                          )}
+                          onClick={() => {
+                            navigate(child.href!);
+                            onNavigate?.();
+                          }}
+                        >
+                          {child.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
 
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className={cn(
-                        "w-full justify-start",
-                        location.pathname === "/project/prediction" && "bg-secondary"
-                      )}
-                      onClick={handlePrediction}
-                    >
-                      <BrainCircuit className="mr-2 h-4 w-4" />
-                      Prediction (Testing)
-                    </Button>
-
-                    {isAdmin && companyId && (
+                  {/* Projects submenu */}
+                  {item.label === "Projects" && isProjectsExpanded && (
+                    <div className="ml-6 mt-1 space-y-1">
+                      <div className="relative">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="w-full justify-start"
-                        onClick={handleAddUser}
+                        onClick={handleCreateProject}
                         disabled={!companyId}
                       >
-                        <UserPlus className="mr-2 h-4 w-4" />
-                        Add User
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create Project
                       </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                        {!companyId && (
+                          <div
+                            className="absolute inset-0 cursor-not-allowed"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              toast({
+                                title: "Company required",
+                                description: "Please create or join a company before creating a project.",
+                                variant: "destructive",
+                              });
+                            }}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                          />
+                        )}
+                      </div>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start"
+                        onClick={() => setManageOpen(!manageOpen)}
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        Manage Projects
+                        <span className="ml-auto">
+                          {manageOpen ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </span>
+                      </Button>
+
+                      {manageOpen && (
+                        <div className="ml-4 mt-1 space-y-1 max-h-60 overflow-auto">
+                          {loadingProjects && (
+                            <div className="px-4 py-2 text-xs text-muted-foreground">
+                              Loading...
+                            </div>
+                          )}
+
+                          {!loadingProjects && projects.length === 0 && (
+                            <div className="px-4 py-2 text-xs text-muted-foreground">
+                              No projects yet
+                            </div>
+                          )}
+
+                          {!loadingProjects &&
+                            projects.map((p) => (
+                              <Button
+                                key={p.id}
+                                variant="ghost"
+                                size="sm"
+                                className={cn(
+                                  "w-full justify-start",
+                                  location.pathname === `/dataset/${p.id}` && cn(
+                                    "bg-primary/10 dark:bg-primary/20",
+                                    "bg-primary/15",
+                                    "border-l-2 border-l-primary"
+                                  )
+                                )}
+                                onClick={() => {
+                                  openProject(p.id);
+                                  onNavigate?.();
+                                }}
+                              >
+                                <span className="truncate">{p.name}</span>
+                              </Button>
+                            ))}
+                        </div>
+                      )}
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start"
+                        onClick={handleSimulation}
+                      >
+                        <Cpu className="mr-2 h-4 w-4" />
+                        Simulation
+                      </Button>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start",
+                          location.pathname === "/project/prediction" && cn(
+                            "bg-primary/10 dark:bg-primary/20",
+                            "bg-primary/15",
+                            "border-l-2 border-l-primary"
+                          )
+                        )}
+                        onClick={handlePrediction}
+                      >
+                        <BrainCircuit className="mr-2 h-4 w-4" />
+                        Prediction (Testing)
+                      </Button>
+
+                      {isAdmin && companyId && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-start"
+                          onClick={handleAddUser}
+                          disabled={!companyId}
+                        >
+                          <UserPlus className="mr-2 h-4 w-4" />
+                          Add User
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </nav>
       </aside>
 

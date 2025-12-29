@@ -5,9 +5,12 @@ import { AppHeader } from "./AppHeader";
 import { AppSidebar } from "./AppSidebar";
 import { AppBreadcrumbs } from "./Breadcrumbs";
 import { BreadcrumbProvider } from "./breadcrumb-context";
+import { SidebarProvider, useSidebar } from "./sidebar-context";
 import { useProfile } from "@/hooks/useProfile";
 import { useRoutePersistence } from "@/hooks/useRoutePersistence";
 import { useToast } from "@/hooks/use-toast";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
 
 // Constants for inactivity tracking
 const INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
@@ -21,6 +24,8 @@ const AppShellContent = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { sessionReady, user, error } = useProfile();
+  const isMobile = useIsMobile();
+  const { isOpen, toggleSidebar } = useSidebar();
   
   // Use refs to persist across remounts
   const visibilityChangeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -187,18 +192,43 @@ const AppShellContent = () => {
   // This component only renders when sessionReady && user (gated by ProtectedRoutes)
   // So we can safely render the UI here
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-screen flex flex-col bg-background transition-colors duration-300 ease-in-out">
       <AppHeader />
-      <div className="flex flex-1 overflow-hidden">
-        <AppSidebar />
-        <main className="flex-1 overflow-y-auto">
+      <div className="flex flex-1 overflow-hidden relative transition-colors duration-300 ease-in-out">
+        {/* Desktop Sidebar */}
+        {!isMobile && (
+          <div className="border-r bg-background">
+            <AppSidebar />
+          </div>
+        )}
+
+        {/* Mobile Sidebar Overlay */}
+        {isMobile && isOpen && (
+          <>
+            <div
+              className="fixed inset-0 bg-black/50 z-40"
+              onClick={toggleSidebar}
+              aria-hidden="true"
+            />
+            <div className="fixed left-0 top-16 bottom-0 z-50 w-64 border-r bg-background">
+              <AppSidebar onNavigate={toggleSidebar} />
+            </div>
+          </>
+        )}
+
+        {/* Main Content */}
+        <main
+          className={cn(
+            "flex-1 overflow-y-auto transition-colors duration-300 ease-in-out"
+          )}
+        >
           <div className="container mx-auto px-4 py-6 max-w-7xl">
             <AppBreadcrumbs className="mb-6" />
             <Outlet />
           </div>
         </main>
       </div>
-      <footer className="border-t bg-background py-4">
+      <footer className="border-t bg-background py-4 transition-colors duration-300 ease-in-out">
         <div className="container mx-auto px-4 text-center text-xs text-muted-foreground">
           © {new Date().getFullYear()} VisionM. All rights reserved.
         </div>
@@ -210,7 +240,9 @@ const AppShellContent = () => {
 export const AppShell = () => {
   return (
     <BreadcrumbProvider>
-      <AppShellContent />
+      <SidebarProvider>
+        <AppShellContent />
+      </SidebarProvider>
     </BreadcrumbProvider>
   );
 };

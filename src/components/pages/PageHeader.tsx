@@ -19,7 +19,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     <div className={cn("mb-8", className)}>
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
+          <h1 className="text-4xl font-bold tracking-tight border-b-2 border-primary/30 pb-2 inline-block">{title}</h1>
           {description && (
             <p className="mt-2 text-sm text-muted-foreground">{description}</p>
           )}
