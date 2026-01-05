@@ -27,6 +27,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
+import { AnnotationWorkspace } from "@/components/annotation/AnnotationWorkspace";
+import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import {
   Tooltip,
   TooltipContent,
@@ -138,6 +140,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const [modelToDelete, setModelToDelete] = useState<TrainedModelSummary | null>(null);
   const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
   const [showDeleteModelDialog, setShowDeleteModelDialog] = useState(false);
+  const [annotationMode, setAnnotationMode] = useState<"training" | "annotation">("training");
 
   // refs
   const pollIntervalRef = useRef<number | null>(null);
@@ -1246,31 +1249,31 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         {/* Project Selection - Always Visible */}
         <motion.div variants={fadeInUpVariants}>
           <Card>
-          <CardHeader>
-            <CardTitle>Select Project</CardTitle>
-            <CardDescription>Choose project scope for datasets</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.length === 0 ? (
-                  <SelectItem value="no-projects" disabled>
-                    No projects available
-                  </SelectItem>
-                ) : (
-                  projects.map((project) => (
-                    <SelectItem key={String(project.id)} value={String(project.id)}>
-                      {project.name}
+            <CardHeader>
+              <CardTitle>Select Project</CardTitle>
+              <CardDescription>Choose project scope for datasets</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a project" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.length === 0 ? (
+                    <SelectItem value="no-projects" disabled>
+                      No projects available
                     </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
+                  ) : (
+                    projects.map((project) => (
+                      <SelectItem key={String(project.id)} value={String(project.id)}>
+                        {project.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </CardContent>
+          </Card>
         </motion.div>
 
         {/* Dataset Selection - Conditional on selectedProjectId */}
@@ -1284,116 +1287,153 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
               exit="hidden"
             >
               <Card>
-            <CardHeader>
-              <CardTitle>Select Dataset Version</CardTitle>
-              <CardDescription>Choose a ready dataset for the selected project</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingDatasets ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading dataset versions...
-                </div>
-              ) : datasetList.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No ready datasets found for this project.</p>
-              ) : (
-                <div className="space-y-3">
-                  {datasetList.map((dataset, index) => {
-                    const id = dataset._id ?? dataset.id ?? String(index);
-                    const key = id || `dataset-${index}`;
-                    return (
-                      <div
-                        key={key}
-                        className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                          selectedDatasetId === id ? "border-primary bg-primary/5" : "hover:bg-muted"
-                        }`}
-                        onClick={() => {
-                          setSelectedDatasetId(String(id));
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setSelectedDatasetId(String(id));
-                          }
-                        }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium">Version: {dataset.version ?? "unknown"}</div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              {(dataset.totalImages ?? 0) + " images"} •{" "}
-                              {new Date(dataset.createdAt ?? dataset.created_at ?? Date.now()).toLocaleDateString()}
+                <CardHeader>
+                  <CardTitle>Select Dataset Version</CardTitle>
+                  <CardDescription>Choose a ready dataset for the selected project</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {loadingDatasets ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading dataset versions...
+                    </div>
+                  ) : datasetList.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No ready datasets found for this project.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {datasetList.map((dataset, index) => {
+                        const id = dataset._id ?? dataset.id ?? String(index);
+                        const key = id || `dataset-${index}`;
+                        return (
+                          <div
+                            key={key}
+                            className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                              selectedDatasetId === id
+                                ? "border-primary bg-primary/5"
+                                : "hover:bg-muted"
+                            }`}
+                            onClick={() => {
+                              setSelectedDatasetId(String(id));
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedDatasetId(String(id));
+                              }
+                            }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-medium">
+                                  Version: {dataset.version ?? "unknown"}
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  {(dataset.totalImages ?? 0) + " images"} •{" "}
+                                  {new Date(
+                                    dataset.createdAt ?? dataset.created_at ?? Date.now(),
+                                  ).toLocaleDateString()}
+                                </div>
+                              </div>
+                              <Badge
+                                variant={
+                                  dataset.status === "ready"
+                                    ? "default"
+                                    : dataset.status === "processing"
+                                    ? "secondary"
+                                    : "destructive"
+                                }
+                              >
+                                {dataset.status ?? "unknown"}
+                              </Badge>
                             </div>
                           </div>
-                          <Badge
-                            variant={
-                              dataset.status === "ready" ? "default" : dataset.status === "processing" ? "secondary" : "destructive"
-                            }
-                          >
-                            {dataset.status ?? "unknown"}
-                          </Badge>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Delete trained model confirmation dialog */}
-        <Dialog open={showDeleteModelDialog} onOpenChange={setShowDeleteModelDialog}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Delete trained model?</DialogTitle>
-              <DialogDescription>
-                This will permanently delete the trained model and its files. Training and
-                inference jobs that used this model will remain in history, but this model
-                will no longer be available for new training or inference.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setShowDeleteModelDialog(false)}
-                disabled={!!deletingModelId}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={handleDeleteModel}
-                disabled={!!deletingModelId}
-              >
-                {deletingModelId ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  "Delete Model"
-                )}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* Dataset Summary + Trained Models - Conditional on selectedDatasetId */}
-        <AnimatePresence mode="wait">
-          {selectedDatasetId && (
+        {/* Annotation mode toggle – only visible when in training view */}
+        {annotationMode === "training" &&
+          selectedDatasetId &&
+          datasetDetails?.unlabeledImages > 0 && (
             <motion.div
-              key="dataset-details"
-              variants={staggerContainerVariants}
+              key="annotation-toggle"
+              variants={fadeInUpVariants}
               initial="hidden"
               animate="visible"
-              exit="hidden"
-              className="grid grid-cols-1 md:grid-cols-2 gap-4"
             >
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => setAnnotationMode("annotation")}
+                >
+                  Annotate Unlabeled Data
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+        {/* Training view content – unchanged, only hidden when in annotation mode */}
+        {annotationMode === "training" && (
+          <>
+            {/* Delete trained model confirmation dialog */}
+            <Dialog open={showDeleteModelDialog} onOpenChange={setShowDeleteModelDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete trained model?</DialogTitle>
+                  <DialogDescription>
+                    This will permanently delete the trained model and its files. Training and
+                    inference jobs that used this model will remain in history, but this model
+                    will no longer be available for new training or inference.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowDeleteModelDialog(false)}
+                    disabled={!!deletingModelId}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleDeleteModel}
+                    disabled={!!deletingModelId}
+                  >
+                    {deletingModelId ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      "Delete Model"
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Dataset Summary + Trained Models - Conditional on selectedDatasetId */}
+            <AnimatePresence mode="wait">
+              {selectedDatasetId && (
+                <motion.div
+                  key="dataset-details"
+                  variants={staggerContainerVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="hidden"
+                  className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                >
             <Card>
               <CardHeader>
                 <CardTitle>Dataset Summary</CardTitle>
@@ -1709,9 +1749,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                 )}
               </CardContent>
             </Card>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
         {/* Model Type + Model Size + Hyperparameters - Conditional on selectedDatasetId */}
         <AnimatePresence mode="wait">
@@ -2152,17 +2192,14 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                             <div className="font-medium">{modelInfo.modelVersion}</div>
                           </div>
                         )}
-                        {modelInfo.downloadUrl && (
+                        {modelInfo.modelId && (
                           <div>
-                            <div className="text-muted-foreground">Download</div>
-                            <a
-                              href={modelInfo.downloadUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-primary underline text-xs"
-                            >
-                              Download model
-                            </a>
+                            <div className="text-muted-foreground mb-2">Download</div>
+                            <ModelDownloadButton
+                              modelId={modelInfo.modelId}
+                              modelName={modelInfo.modelVersion || modelInfo.modelId}
+                              availableFormats={["pt", "onnx", "zip"]}
+                            />
                           </div>
                         )}
                       </div>
@@ -2235,22 +2272,36 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
         {/* Start Simulation CTA - Conditional */}
         <AnimatePresence mode="wait">
-          {selectedProjectId && selectedDatasetId && modelType && !isSimulating && !jobId && (
-            <motion.div
-              key="start-training"
-              variants={fadeInUpVariants}
-              initial="hidden"
-              animate="visible"
-              exit="hidden"
-              className="flex justify-end"
-            >
-              <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
-                <Play className="h-4 w-4" />
-                Start Training
-              </Button>
-            </motion.div>
-          )}
+          {selectedProjectId &&
+            selectedDatasetId &&
+            modelType &&
+            !isSimulating &&
+            !jobId && (
+              <motion.div
+                key="start-training"
+                variants={fadeInUpVariants}
+                initial="hidden"
+                animate="visible"
+                exit="hidden"
+                className="flex justify-end"
+              >
+                <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
+                  <Play className="h-4 w-4" />
+                  Start Training
+                </Button>
+              </motion.div>
+            )}
         </AnimatePresence>
+          </>
+        )}
+
+        {/* Annotation workspace view */}
+        {annotationMode === "annotation" && selectedDatasetId && (
+          <AnnotationWorkspace
+            datasetId={selectedDatasetId}
+            onClose={() => setAnnotationMode("training")}
+          />
+        )}
       </motion.div>
 
       {/* Confirmation dialog */}

@@ -1,7 +1,5 @@
 # VisionM Project Documentation
 
-# hi hello how are you
-
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
