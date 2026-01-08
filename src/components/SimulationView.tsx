@@ -1362,9 +1362,11 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         </AnimatePresence>
 
         {/* Annotation mode toggle – only visible when in training view */}
+        {/* Show button only for completely unlabeled datasets (no labels exist yet) */}
         {annotationMode === "training" &&
           selectedDatasetId &&
-          datasetDetails?.unlabeledImages > 0 && (
+          datasetDetails?.unlabeledImages > 0 &&
+          (datasetDetails?.labeledImages ?? datasetDetails?.trainCount ?? 0) === 0 && (
             <motion.div
               key="annotation-toggle"
               variants={fadeInUpVariants}
@@ -1738,6 +1740,18 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                         </ul>
                                       </div>
                                     )}
+                                </div>
+                              )}
+
+                              {/* Download Model Button */}
+                              {model.modelId && (
+                                <div className="pt-3 border-t">
+                                  <div className="text-xs font-semibold mb-2">Download Model</div>
+                                  <ModelDownloadButton
+                                    modelId={model.modelId}
+                                    modelName={displayName}
+                                    availableFormats={["pt", "onnx", "zip"]}
+                                  />
                                 </div>
                               )}
                             </div>

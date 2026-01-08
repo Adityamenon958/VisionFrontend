@@ -2010,7 +2010,7 @@ const PredictionPage = () => {
         formData.append("modelId", selectedModelId);
         formData.append("confidenceThreshold", confidenceThreshold.toString());
         testFiles.forEach((file) => {
-          formData.append("images", file);
+          formData.append("files", file);
         });
 
         res = await fetch(url, {

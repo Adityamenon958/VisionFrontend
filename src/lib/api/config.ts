@@ -89,6 +89,8 @@ export const apiRequest = async <T>(
   const headers = await getAuthHeaders();
   const url = apiUrl(path);
 
+  console.log(`[apiRequest] ${options.method || "GET"} ${url}`);
+
   // Don't override Content-Type for FormData
   const requestHeaders: HeadersInit = { ...headers };
   if (!(options.body instanceof FormData)) {
@@ -105,6 +107,8 @@ export const apiRequest = async <T>(
     ...options,
     headers: requestHeaders,
   });
+
+  console.log(`[apiRequest] Response status: ${response.status} for ${url}`);
 
   // Handle 401 Unauthorized
   if (response.status === 401) {
@@ -126,9 +130,11 @@ export const apiRequest = async <T>(
       }
     }
 
+    console.error(`[apiRequest] Error ${response.status} for ${url}:`, errorMessage);
     throw new Error(errorMessage);
   }
 
-  return response.json();
+  const json = await response.json();
+  return json;
 };
 

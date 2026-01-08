@@ -72,6 +72,9 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   // Handle mouse down - start drawing or editing
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // Safety check: ensure canvas is ready
+      if (!canvasRef.current) return;
+      
       if (isDrawing && selectedCategoryId) {
         // Drawing mode
         const { x, y } = getMousePosition(e);
@@ -142,6 +145,9 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   // Handle mouse move - update active box or editing (throttled with RAF)
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // Safety check: ensure canvas is ready
+      if (!canvasRef.current) return;
+      
       const { x, y } = getMousePosition(e);
 
       // Handle drawing
@@ -150,13 +156,15 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
 
         if (!rafRef.current) {
           rafRef.current = requestAnimationFrame(() => {
-            if (pendingUpdate.current) {
+            // Capture the value to avoid race condition
+            const update = pendingUpdate.current;
+            if (update) {
               setDrawingState((prev) => {
                 if (!prev) return null;
                 return {
                   ...prev,
-                  currentX: pendingUpdate.current!.x,
-                  currentY: pendingUpdate.current!.y,
+                  currentX: update.x,
+                  currentY: update.y,
                 };
               });
               pendingUpdate.current = null;
@@ -173,10 +181,13 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
 
         if (!rafRef.current) {
           rafRef.current = requestAnimationFrame(() => {
-            if (pendingUpdate.current && editingState) {
-              const { annotationId, mode, handle, startX, startY, startBbox } = editingState;
-              const dx = pendingUpdate.current.x - startX;
-              const dy = pendingUpdate.current.y - startY;
+            // Capture values to avoid race condition
+            const update = pendingUpdate.current;
+            const editing = editingState;
+            if (update && editing) {
+              const { annotationId, mode, handle, startX, startY, startBbox } = editing;
+              const dx = update.x - startX;
+              const dy = update.y - startY;
 
               let newBbox: [number, number, number, number];
 

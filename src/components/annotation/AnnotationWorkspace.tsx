@@ -55,7 +55,6 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const {
     images,
@@ -94,6 +93,12 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const [hasConflicts, setHasConflicts] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
   const conflictCheckIntervalRef = useRef<number | null>(null);
+  // Ref to track current annotations for conflict detection (avoids dependency issues)
+  const annotationsRef = useRef(annotations);
+  // Cache ref for API requests (persists across effect re-runs)
+  const lastFetchTimeRef = useRef<number>(0);
+  // Track ongoing requests to prevent duplicate calls
+  const ongoingRequestRef = useRef<string | null>(null);
 
   // Track image loading state
   const { loaded: imageLoaderLoaded, error: imageError } = useImageLoader(
@@ -114,17 +119,40 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     const initialize = async () => {
       setLoading(true);
       try {
+        console.log("[AnnotationWorkspace] Initializing for dataset:", datasetId);
+        
         // Fetch unlabeled images
+        console.log("[AnnotationWorkspace] Fetching unlabeled images...");
         const imagesData = await annotationsApi.getUnlabeledImages(datasetId);
+        console.log("[AnnotationWorkspace] Unlabeled images response:", imagesData);
+        
+        if (!imagesData || !imagesData.images) {
+          throw new Error("Invalid response from unlabeled-images endpoint");
+        }
+        
         loadImages(imagesData.images);
+        console.log("[AnnotationWorkspace] Loaded", imagesData.images.length, "images");
 
         // Auto-select first image
         if (imagesData.images.length > 0) {
           selectImage(0);
+        } else {
+          toast({
+            title: "No unlabeled images",
+            description: "This dataset has no unlabeled images to annotate.",
+            variant: "destructive",
+          });
         }
 
         // Fetch categories
+        console.log("[AnnotationWorkspace] Fetching categories...");
         const categoriesData = await categoriesApi.getCategories(datasetId);
+        console.log("[AnnotationWorkspace] Categories response:", categoriesData);
+        
+        if (!categoriesData || !categoriesData.categories) {
+          throw new Error("Invalid response from categories endpoint");
+        }
+        
         setCategories(categoriesData.categories);
 
         // Set first category as selected
@@ -132,22 +160,53 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
           setCategory(categoriesData.categories[0].id);
         }
       } catch (error) {
-        console.error("Failed to initialize annotation workspace:", error);
+        console.error("[AnnotationWorkspace] Failed to initialize:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        toast({
+          title: "Failed to load annotation workspace",
+          description: errorMessage,
+          variant: "destructive",
+        });
       } finally {
         setLoading(false);
       }
     };
 
     void initialize();
-  }, [datasetId, loadImages, selectImage, setCategory]);
+  }, [datasetId, loadImages, selectImage, setCategory, toast]);
 
-  // Fetch annotations when image changes
+  // Keep annotations ref in sync with state (for conflict detection without dependency issues)
+  useEffect(() => {
+    annotationsRef.current = annotations;
+  }, [annotations]);
+
+  // Fetch annotations when image changes (with debouncing and request deduplication)
   useEffect(() => {
     if (!currentImage) return;
 
-    const fetchAnnotations = async () => {
+    const imageId = currentImage.id;
+    const requestKey = `${datasetId}-${imageId}`;
+    const CACHE_DURATION = 2000; // 2 seconds cache
+
+    // Debounce fetch to prevent rapid requests when navigating quickly between images
+    const timeoutId = setTimeout(async () => {
+      const now = Date.now();
+      
+      // Check cache - don't fetch if recently fetched (within 2 seconds)
+      if (now - lastFetchTimeRef.current < CACHE_DURATION) {
+        return;
+      }
+
+      // Prevent duplicate simultaneous requests
+      if (ongoingRequestRef.current === requestKey) {
+        return;
+      }
+
+      ongoingRequestRef.current = requestKey;
+      lastFetchTimeRef.current = now;
+
       try {
-        const data = await annotationsApi.getAnnotations(datasetId, currentImage.id);
+        const data = await annotationsApi.getAnnotations(datasetId, imageId);
         loadAnnotations(data.annotations);
         setSelectedAnnotation(null); // Clear selection on image change
         selection.clearSelection(); // Phase 6: Clear multi-select
@@ -159,23 +218,60 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
           description: error instanceof Error ? error.message : "Unknown error",
           variant: "destructive",
         });
+      } finally {
+        // Clear ongoing request after a short delay to allow cache to work
+        setTimeout(() => {
+          if (ongoingRequestRef.current === requestKey) {
+            ongoingRequestRef.current = null;
+          }
+        }, CACHE_DURATION);
       }
-    };
+    }, 100); // Small debounce (100ms) to batch rapid image changes
 
-    void fetchAnnotations();
-  }, [currentImage?.id, datasetId, loadAnnotations, setSelectedAnnotation, selection]);
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImage?.id, datasetId]); // ✅ FIXED: Removed unstable dependencies
 
-  // Phase 6: Conflict detection - poll for updates
+  // Phase 6: Conflict detection - poll for updates (CRITICAL FIX: Only depend on imageId)
   useEffect(() => {
     if (!currentImage || !imageLoaded) return;
+    
+    // Capture datasetId and imageLoaded from closure (not in dependencies to prevent re-runs)
+    const currentDatasetId = datasetId;
+    const currentImageId = currentImage.id;
+    const requestKey = `${currentDatasetId}-${currentImageId}`;
+
+    // Clear any existing interval first to prevent accumulation
+    if (conflictCheckIntervalRef.current) {
+      clearInterval(conflictCheckIntervalRef.current);
+      conflictCheckIntervalRef.current = null;
+    }
+
+    const CACHE_DURATION = 2000; // 2 seconds cache to prevent redundant requests
+    const POLL_INTERVAL = 5000; // 5 seconds polling interval
 
     const checkForConflicts = async () => {
+      // Only poll if tab is visible
+      if (document.hidden) return;
+
+      const now = Date.now();
+      // Don't fetch if last fetch was < 2 seconds ago (caching) or if request is ongoing
+      if (now - lastFetchTimeRef.current < CACHE_DURATION || ongoingRequestRef.current === requestKey) {
+        return;
+      }
+
+      ongoingRequestRef.current = requestKey;
+      lastFetchTimeRef.current = now;
+
       try {
-        const data = await annotationsApi.getAnnotations(datasetId, currentImage.id);
+        const data = await annotationsApi.getAnnotations(currentDatasetId, currentImageId);
+        
         const latestAnnotations = data.annotations;
 
         // Check if any annotation was updated elsewhere
-        const conflicts = annotations.filter((localAnn) => {
+        // Use ref to access current annotations without adding to dependencies
+        const currentAnnotations = annotationsRef.current;
+        const conflicts = currentAnnotations.filter((localAnn) => {
           const latestAnn = latestAnnotations.find((a) => a.id === localAnn.id);
           if (!latestAnn) return false;
           return latestAnn.updatedAt && localAnn.updatedAt && latestAnn.updatedAt !== localAnn.updatedAt;
@@ -192,18 +288,59 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
       } catch (error) {
         // Silently fail - don't spam errors
         console.error("Conflict check failed:", error);
+      } finally {
+        // Clear ongoing request after cache duration
+        setTimeout(() => {
+          if (ongoingRequestRef.current === requestKey) {
+            ongoingRequestRef.current = null;
+          }
+        }, CACHE_DURATION);
       }
     };
 
-    // Poll every 5 seconds
-    conflictCheckIntervalRef.current = window.setInterval(checkForConflicts, 5000);
+    // Initial check
+    checkForConflicts();
 
-    return () => {
+    // Setup polling with visibility check
+    const startPolling = () => {
       if (conflictCheckIntervalRef.current) {
         clearInterval(conflictCheckIntervalRef.current);
       }
+      conflictCheckIntervalRef.current = window.setInterval(checkForConflicts, POLL_INTERVAL);
     };
-  }, [currentImage?.id, datasetId, annotations, hasConflicts, imageLoaded, toast]);
+
+    const stopPolling = () => {
+      if (conflictCheckIntervalRef.current) {
+        clearInterval(conflictCheckIntervalRef.current);
+        conflictCheckIntervalRef.current = null;
+      }
+    };
+
+    // Handle visibility changes
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+        checkForConflicts(); // Check immediately when tab becomes visible
+      }
+    };
+
+    // Start polling if tab is visible
+    if (!document.hidden) {
+      startPolling();
+    }
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+    // ✅ CRITICAL FIX: Only depend on imageId to prevent interval accumulation
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImage?.id]); // Only imageId - datasetId and imageLoaded captured from closure
 
   // Phase 6: Filter annotations by state
   const filteredAnnotations = useMemo(() => {
@@ -237,66 +374,43 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     }
   }, [selectedCategoryId, selectedAnnotationId, annotations, categories, updateAnnotation, currentImage]);
 
-  // Auto-save debounced function
-  const triggerAutoSave = useCallback(() => {
-    // Clear existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+  // Manual save handler - batch save current annotations on demand
+  const handleSaveAnnotations = useCallback(async () => {
+    if (annotations.length === 0) {
+      markSaved();
+      return;
     }
 
-    // Set unsavedChanges flag (handled by hook)
-    // Debounce save (2 seconds)
-    saveTimeoutRef.current = setTimeout(async () => {
-      if (annotations.length === 0) {
-        markSaved();
-        return;
+    setSaveStatus("saving");
+
+    try {
+      // Prepare annotations for batch save
+      const annotationsToSave = annotations.map((ann) => ({
+        imageId: ann.imageId,
+        bbox: ann.bbox,
+        categoryId: ann.categoryId,
+      }));
+
+      const result = await annotationsApi.batchSaveAnnotations(datasetId, annotationsToSave);
+
+      if (result.failed > 0) {
+        // Handle partial failure
+        toast({
+          title: "Some annotations failed to save",
+          description: `${result.saved} saved, ${result.failed} failed`,
+          variant: "destructive",
+        });
       }
-
-      // Show "Saving..." feedback
-      setSaveStatus("saving");
-
-      try {
-        // Prepare annotations for batch save (only new/updated ones)
-        const annotationsToSave = annotations.map((ann) => ({
-          imageId: ann.imageId,
-          bbox: ann.bbox,
-          categoryId: ann.categoryId,
-        }));
-
-        const result = await annotationsApi.batchSaveAnnotations(datasetId, annotationsToSave);
-        
-        if (result.failed > 0) {
-          // Handle partial failure
-          toast({
-            title: "Some annotations failed to save",
-            description: `${result.saved} saved, ${result.failed} failed`,
-            variant: "destructive",
-          });
-        }
-        markSaved();
-        setSaveStatus("saved");
-        // Clear "Saved" message after 2 seconds
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      } catch (error) {
-        console.error("Failed to save annotations:", error);
-        setSaveStatus("error");
-        setTimeout(() => setSaveStatus("idle"), 3000);
-      }
-    }, 2000);
-  }, [annotations, datasetId, markSaved]);
-
-  // Trigger auto-save when annotations change
-  useEffect(() => {
-    if (annotations.length > 0) {
-      triggerAutoSave();
+      markSaved();
+      setSaveStatus("saved");
+      // Clear "Saved" message after 2 seconds
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch (error) {
+      console.error("Failed to save annotations:", error);
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
     }
-    // Cleanup timeout on unmount
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-    };
-  }, [annotations, triggerAutoSave]);
+  }, [annotations, datasetId, markSaved, toast]);
 
   // Handle image selection with unsaved changes confirmation
   const handleImageSelect = useCallback(
@@ -613,6 +727,14 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
         redo();
       }
 
+      // Ctrl/Cmd+S → manual save
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        if (unsavedChanges && annotations.length > 0 && saveStatus !== "saving") {
+          void handleSaveAnnotations();
+        }
+      }
+
       // 1-9 → select category
       const categoryIndex = parseInt(e.key) - 1;
       if (
@@ -650,8 +772,26 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     handleDeleteAnnotation,
     handlePreviousImage,
     handleNextImage,
+    annotations.length,
+    unsavedChanges,
+    saveStatus,
+    handleSaveAnnotations,
     toast,
   ]);
+
+  // Warn user before leaving the page with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (unsavedChanges) {
+        event.preventDefault();
+        event.returnValue = "";
+        return "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [unsavedChanges]);
 
   if (loading) {
     return (
@@ -710,6 +850,14 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            variant={unsavedChanges ? "default" : "outline"}
+            size="sm"
+            onClick={handleSaveAnnotations}
+            disabled={!unsavedChanges || annotations.length === 0 || saveStatus === "saving"}
+          >
+            {saveStatus === "saving" ? "Saving..." : "Save annotations"}
+          </Button>
           <AnnotationExportButton
             datasetId={datasetId}
             imageIds={currentImage ? [currentImage.id] : undefined}
