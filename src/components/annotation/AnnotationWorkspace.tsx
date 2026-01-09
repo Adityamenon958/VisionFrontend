@@ -84,6 +84,15 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const { toast } = useToast();
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const [imageMetrics, setImageMetrics] = useState<{
+    naturalWidth: number;
+    naturalHeight: number;
+    displayWidth: number;
+    displayHeight: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   
@@ -969,17 +978,57 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
 
         {/* Center: image + canvas */}
         <div className="border rounded-md p-3 flex flex-col gap-3" role="main" aria-label="Image annotation area">
-          <div className="relative w-full aspect-video border rounded-md overflow-hidden bg-muted flex items-center justify-center">
+          <div
+            ref={imageContainerRef}
+            className="relative w-full aspect-video border rounded-md overflow-hidden bg-muted flex items-center justify-center"
+          >
             <ImageViewer
               imageUrl={currentImage?.url ?? null}
               imageId={currentImage?.id ?? null}
               onImageLoad={() => setImageLoaded(true)}
               onImageError={() => setImageLoaded(false)}
+              onImageMetricsChange={({ naturalWidth, naturalHeight }) => {
+                const container = imageContainerRef.current;
+                if (!container || !naturalWidth || !naturalHeight) {
+                  return;
+                }
+                const rect = container.getBoundingClientRect();
+                const containerWidth = rect.width;
+                const containerHeight = rect.height;
+
+                if (containerWidth <= 0 || containerHeight <= 0) {
+                  return;
+                }
+
+                // object-contain style: uniform scaling to fit within container
+                const scale = Math.min(
+                  containerWidth / naturalWidth,
+                  containerHeight / naturalHeight
+                );
+
+                const displayWidth = naturalWidth * scale;
+                const displayHeight = naturalHeight * scale;
+                const offsetX = (containerWidth - displayWidth) / 2;
+                const offsetY = (containerHeight - displayHeight) / 2;
+
+                setImageMetrics({
+                  naturalWidth,
+                  naturalHeight,
+                  displayWidth,
+                  displayHeight,
+                  offsetX,
+                  offsetY,
+                });
+              }}
             />
-            {imageLoaded && (
+            {imageLoaded && imageMetrics && (
               <BoundingBoxCanvas
-                imageWidth={800}
-                imageHeight={450}
+                imageWidth={imageMetrics.displayWidth}
+                imageHeight={imageMetrics.displayHeight}
+                naturalWidth={imageMetrics.naturalWidth}
+                naturalHeight={imageMetrics.naturalHeight}
+                offsetX={imageMetrics.offsetX}
+                offsetY={imageMetrics.offsetY}
                 annotations={filteredAnnotations}
                 categories={categories}
                 selectedCategoryId={selectedCategoryId}

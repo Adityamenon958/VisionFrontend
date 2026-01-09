@@ -18,4 +18,3 @@ export const mockCategories: Category[] = [
 
 export const mockAnnotations: Annotation[] = [];
 
-

@@ -84,4 +84,3 @@ export const useAnnotationSelection = (): UseAnnotationSelectionReturn => {
     clearSelection,
   };
 };
-

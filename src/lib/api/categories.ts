@@ -102,4 +102,3 @@ export const reorderCategories = async (
     body: JSON.stringify({ categoryIds }),
   });
 };
-

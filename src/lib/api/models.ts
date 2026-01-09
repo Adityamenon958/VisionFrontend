@@ -58,4 +58,3 @@ export const getModelInfo = async (
 
   return apiRequest(path);
 };
-

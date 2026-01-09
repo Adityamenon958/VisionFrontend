@@ -960,4 +960,3 @@ All endpoints should return appropriate HTTP status codes and error messages:
 
 This document serves as the complete reference for all annotation-related API endpoints and their requirements.
 
-

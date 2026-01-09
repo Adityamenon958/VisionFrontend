@@ -184,4 +184,3 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
     </DropdownMenu>
   );
 };
-
