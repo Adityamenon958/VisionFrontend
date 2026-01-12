@@ -1366,7 +1366,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         {annotationMode === "training" &&
           selectedDatasetId &&
           datasetDetails?.unlabeledImages > 0 &&
-          (datasetDetails?.labeledImages ?? datasetDetails?.trainCount ?? 0) === 0 && (
+         (
             <motion.div
               key="annotation-toggle"
               variants={fadeInUpVariants}

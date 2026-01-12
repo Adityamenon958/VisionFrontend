@@ -44,8 +44,10 @@ export const useBackendStatus = (): BackendStatus => {
 
     try {
       // Try multiple endpoints in order of preference
+      // Health endpoint is at root level (not under /api), so strip /api if present
+      const baseWithoutApi = apiBaseUrl.replace(/\/api\/?$/, "").replace(/\/+$/, "");
       const endpoints = [
-        `${apiBaseUrl.replace(/\/+$/, "")}/health`, // Try /health first
+        `${baseWithoutApi}/health`, // Try /health first (root level, not /api/health)
         `${apiBaseUrl.replace(/\/+$/, "")}/datasets?limit=1`, // Fallback to lightweight endpoint
       ];
 

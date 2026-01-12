@@ -1770,7 +1770,7 @@ const PredictionPage = () => {
       if (historyStatusFilter && historyStatusFilter !== "all") {
         qs.append("status", historyStatusFilter);
       }
-      const url = apiUrl(`/inference?${qs.toString()}`);
+      const url = apiUrl(`/inference/history?${qs.toString()}`);
       const res = await fetch(url, { headers });
 
       if (!res.ok) {
