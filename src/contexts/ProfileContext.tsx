@@ -22,6 +22,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
   // Track in-flight profile loads so multiple callers share the same request
   const loadProfilePromiseRef = useRef<Promise<void> | null>(null);
   const lastProfileUserIdRef = useRef<string | null>(null);
+  const hasInitializedProfileRef = useRef(false);
 
   const loadProfile = useCallback(
     async (session: any) => {
@@ -276,6 +277,8 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           // Set sessionReady after loadProfile completes (or timeout)
           // If profile is still loading, it will complete in background
           setSessionReady(true);
+          hasInitializedProfileRef.current = true;
+
           if (isDev) {
             console.log("[ProfileContext] Session hydrated successfully");
           }
@@ -346,20 +349,22 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           setLoading(false);
           setError("Your session expired. Please sign in again.");
         }
-      } else if (
-        event === "SIGNED_IN" ||
-        event === "TOKEN_REFRESHED" ||
-        event === "USER_UPDATED"
-      ) {
-        // Clear explicit sign-out marker on any successful session
+      } else if (event === "SIGNED_IN") {
+        // 🔐 Prevent re-initialization on tab focus
+        if (hasInitializedProfileRef.current) {
+          if (isDev) {
+            console.log("[ProfileContext] Ignoring repeated SIGNED_IN event");
+          }
+          return;
+        }
+      
         try {
           sessionStorage.removeItem("VISIONM_EXPLICIT_SIGNOUT");
-        } catch {
-          // ignore
-        }
-
+        } catch {}
+      
+        hasInitializedProfileRef.current = true;
         setUser(session.user);
-        // Don't set sessionReady until loadProfile completes
+      
         try {
           await loadProfile(session);
           setSessionReady(true);
@@ -367,7 +372,17 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           console.error("[ProfileContext] loadProfile threw error in auth state change:", profileError);
           setSessionReady(true);
         }
+      
+      } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        // ✅ Token refresh happens on tab focus — do NOT reload profile
+        if (isDev) {
+          console.log("[ProfileContext] Token refreshed / user updated — skipping profile reload");
+        }
+      
+        setUser(session.user);
+        setSessionReady(true);
       }
+      
     });
 
     return () => {
