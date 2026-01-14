@@ -102,3 +102,46 @@ export const reorderCategories = async (
     body: JSON.stringify({ categoryIds }),
   });
 };
+
+/**
+ * Get detected class IDs from labeled dataset
+ * GET /api/dataset/:datasetId/detected-classes
+ */
+export interface DetectedClassesResponse {
+  datasetId: string;
+  classIds: number[];
+  classNames: string[];
+  totalClasses: number;
+  hasCategories: boolean;
+}
+
+export const getDetectedClasses = async (
+  datasetId: string
+): Promise<DetectedClassesResponse> => {
+  const path = `/dataset/${encodeURIComponent(datasetId)}/detected-classes`;
+
+  return apiRequest(path);
+};
+
+/**
+ * Create categories from detected class IDs with user-provided names
+ * POST /api/dataset/:datasetId/create-categories-from-classes
+ */
+export interface CreateCategoriesFromClassesResponse {
+  message: string;
+  createdCount: number;
+  classes: number[];
+  categories: Category[];
+}
+
+export const createCategoriesFromClasses = async (
+  datasetId: string,
+  classMappings: Record<string, string>
+): Promise<CreateCategoriesFromClassesResponse> => {
+  const path = `/dataset/${encodeURIComponent(datasetId)}/create-categories-from-classes`;
+
+  return apiRequest(path, {
+    method: "POST",
+    body: JSON.stringify({ classMappings }),
+  });
+};

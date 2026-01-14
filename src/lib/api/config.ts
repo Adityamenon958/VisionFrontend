@@ -67,8 +67,15 @@ export const fetchWithRetry = async (
       return response;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("Network error");
+      
+      // Don't retry on connection refused errors - backend is likely not running
+      if (error instanceof TypeError && 
+          (error.message.includes("Failed to fetch") || 
+           error.message.includes("ERR_CONNECTION_REFUSED"))) {
+        throw lastError; // Fail immediately for connection errors
+      }
 
-      // Retry on network errors
+      // Retry on other network errors
       if (attempt < maxRetries - 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
         continue;

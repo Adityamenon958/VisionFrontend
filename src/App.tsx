@@ -26,6 +26,7 @@ import { AccountSecurityPage } from "@/pages/AccountSecurityPage";
 import { AccountPreferencesPage } from "@/pages/AccountPreferencesPage";
 import PredictionPage from "@/pages/PredictionPage";
 import PredictionHistoryDetailsPage from "@/pages/PredictionHistoryDetailsPage";
+import { AnnotationPage } from "@/pages/AnnotationPage";
 // Route persistence is handled by useRoutePersistence hook in AppShell
 
 // Protected routes component - gates routes behind authentication
@@ -71,6 +72,9 @@ const ProtectedRoutes = () => {
         {/* Prediction */}
         <Route path="/project/prediction" element={<PredictionPage />} />
         <Route path="/project/prediction/history/:inferenceId" element={<PredictionHistoryDetailsPage />} />
+        
+        {/* Annotation */}
+        <Route path="/annotation/:datasetId" element={<AnnotationPage />} />
         
         {/* Team */}
         <Route path="/dashboard/team" element={<TeamMembersPage />} />

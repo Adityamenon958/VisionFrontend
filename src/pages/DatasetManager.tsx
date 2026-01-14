@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { fadeInUpVariants, staggerContainerVariants } from "@/utils/animations";
+import { ClassNameDialog } from "@/components/dataset/ClassNameDialog";
+import { getDetectedClasses, type DetectedClassesResponse } from "@/lib/api/categories";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim();
 const apiUrl = (path: string) => {
@@ -151,6 +153,11 @@ const DatasetManager = () => {
 
   const [labelledOpen, setLabelledOpen] = useState<boolean>(false);
   const [unlabelledOpen, setUnlabelledOpen] = useState<boolean>(false);
+
+  // Class name dialog state
+  const [showClassNameDialog, setShowClassNameDialog] = useState(false);
+  const [detectedClassesData, setDetectedClassesData] = useState<DetectedClassesResponse | null>(null);
+  const hasShownClassNamePopupRef = useRef<Set<string>>(new Set());
 
   const [versions, setVersions] = useState<VersionEntry[]>([]);
   const [selectedVersionDatasetId, setSelectedVersionDatasetId] = useState<string | null>(null);
@@ -1149,9 +1156,40 @@ const DatasetManager = () => {
     return null;
   };
 
+  // ------- Check for detected class IDs and show popup if needed -------
+  const checkForDetectedClasses = useCallback(
+    async (datasetId: string) => {
+      // Prevent duplicate popups for the same dataset
+      if (hasShownClassNamePopupRef.current.has(datasetId)) {
+        return;
+      }
+
+      try {
+        const detectedClasses = await getDetectedClasses(datasetId);
+
+        // Only show popup if:
+        // 1. Class IDs were detected (totalClasses > 0)
+        // 2. Categories don't exist yet (hasCategories === false)
+        if (detectedClasses.totalClasses > 0 && !detectedClasses.hasCategories) {
+          setDetectedClassesData(detectedClasses);
+          setShowClassNameDialog(true);
+          hasShownClassNamePopupRef.current.add(datasetId);
+        }
+      } catch (error: any) {
+        // Non-blocking: Log error but don't show popup
+        // This allows normal dataset usage even if the check fails
+        console.warn("Error checking detected classes:", error);
+        
+        // Don't show popup on error - user can proceed normally
+        // Errors like 404 (dataset not found) or 500 (server error) are handled silently
+      }
+    },
+    []
+  );
+
   // ------- Poll dataset status (GET /dataset/:datasetId/status) -------
   const pollDatasetStatus = useCallback(
-    async (datasetId: string) => {
+    async (datasetId: string, isUnlabeled?: boolean) => {
       setUploadStatus("processing");
       setStatusMessage("Processing dataset...");
 
@@ -1188,9 +1226,26 @@ const DatasetManager = () => {
                 if (metaRes.ok) {
                   const metaJson = await metaRes.json();
                   setMetadata(metaJson);
+                  
+                  // Phase 1: Show notification for unlabeled dataset upload completion
+                  if (isUnlabeled) {
+                    toast({
+                      title: "Upload completed",
+                      description: "Please go to Simulation and annotate the images before training.",
+                      variant: "info",
+                    });
+                  }
                 }
               } catch (err) {
                 console.warn("Failed to fetch final metadata:", err);
+              }
+
+              // Check for detected class IDs (only for labeled datasets)
+              if (!isUnlabeled) {
+                // Small delay to ensure backend has processed everything
+                setTimeout(() => {
+                  checkForDetectedClasses(datasetId);
+                }, 1000);
               }
 
               // fetch full file manifest
@@ -1229,7 +1284,7 @@ const DatasetManager = () => {
         }
       }, 3000);
     },
-    [toast],
+    [toast, checkForDetectedClasses],
   );
 
   // ------- Scroll to upload section handler -------
@@ -1380,7 +1435,7 @@ const DatasetManager = () => {
       }
 
       // start polling for server-side processing
-      await pollDatasetStatus(datasetId);
+      await pollDatasetStatus(datasetId, selectedFolderType === "unlabelled");
     } catch (err: any) {
       setUploadStatus("failed");
       setStatusMessage("Upload failed.");
@@ -2760,6 +2815,25 @@ const DatasetManager = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Class Name Dialog */}
+      {showClassNameDialog && detectedClassesData && currentDatasetId && (
+        <ClassNameDialog
+          datasetId={currentDatasetId}
+          detectedClasses={detectedClassesData}
+          open={showClassNameDialog}
+          onClose={() => {
+            setShowClassNameDialog(false);
+            setDetectedClassesData(null);
+          }}
+          onSuccess={() => {
+            // Optionally refresh dataset metadata or show success message
+            // The dialog already shows a success toast, so we can just close
+            setShowClassNameDialog(false);
+            setDetectedClassesData(null);
+          }}
+        />
+      )}
     </motion.div>
   );
 };

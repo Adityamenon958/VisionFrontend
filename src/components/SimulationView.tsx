@@ -27,7 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
-import { AnnotationWorkspace } from "@/components/annotation/AnnotationWorkspace";
+import { useNavigate } from "react-router-dom";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import {
   Tooltip,
@@ -78,6 +78,7 @@ const FALLBACK_YOLO_MODELS = [
 export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profile }) => {
   const { toast } = useToast();
   const { sessionReady } = useProfile();
+  const navigate = useNavigate();
 
   // selections
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -140,7 +141,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const [modelToDelete, setModelToDelete] = useState<TrainedModelSummary | null>(null);
   const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
   const [showDeleteModelDialog, setShowDeleteModelDialog] = useState(false);
-  const [annotationMode, setAnnotationMode] = useState<"training" | "annotation">("training");
+  // annotationMode removed - now using separate route for annotation page
 
   // refs
   const pollIntervalRef = useRef<number | null>(null);
@@ -1361,10 +1362,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           )}
         </AnimatePresence>
 
-        {/* Annotation mode toggle – only visible when in training view */}
-        {/* Show button only for completely unlabeled datasets (no labels exist yet) */}
-        {annotationMode === "training" &&
-          selectedDatasetId &&
+        {/* Phase 2: Annotate Data button - show for unlabeled datasets */}
+        {selectedDatasetId &&
           datasetDetails?.unlabeledImages > 0 &&
          (
             <motion.div
@@ -1377,16 +1376,19 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                 <Button
                   variant="outline"
                   type="button"
-                  onClick={() => setAnnotationMode("annotation")}
+                  onClick={() => {
+                    // Phase 2: Navigate to annotation page for this dataset version
+                    navigate(`/annotation/${selectedDatasetId}`);
+                  }}
                 >
-                  Annotate Unlabeled Data
+                  Annotate Data
                 </Button>
               </div>
             </motion.div>
           )}
 
-        {/* Training view content – unchanged, only hidden when in annotation mode */}
-        {annotationMode === "training" && (
+        {/* Training view content */}
+        {(
           <>
             {/* Delete trained model confirmation dialog */}
             <Dialog open={showDeleteModelDialog} onOpenChange={setShowDeleteModelDialog}>
@@ -2307,14 +2309,6 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
             )}
         </AnimatePresence>
           </>
-        )}
-
-        {/* Annotation workspace view */}
-        {annotationMode === "annotation" && selectedDatasetId && (
-          <AnnotationWorkspace
-            datasetId={selectedDatasetId}
-            onClose={() => setAnnotationMode("training")}
-          />
         )}
       </motion.div>
 

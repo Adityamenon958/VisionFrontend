@@ -9,6 +9,8 @@ export const convertAnnotationsToLabels = async (
   options?: {
     imageIds?: string[];
     folder?: string;
+    categories?: Array<{ id: string; name: string }>; // Phase 6: Category names for YOLO data.yaml
+    unannotatedImageIds?: string[]; // Phase 5: For creating empty label files for good images
   }
 ): Promise<{
   converted: number;
