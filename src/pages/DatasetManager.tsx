@@ -115,6 +115,7 @@ interface FileEntry {
   folder?: string;
   storedPath: string;
   thumbnailAvailable?: boolean;
+  thumbnailUrl?: string | null; // Full URL from backend (preferred over constructing from id)
   url?: string;
   // Legacy fields for backward compatibility
   name?: string;
@@ -692,6 +693,7 @@ const DatasetManager = () => {
         folder: file.folder,
         storedPath: file.storedPath || file.path || (file.folder ? `${file.folder}/${file.originalName || file.name}` : file.originalName || file.name || ""),
         thumbnailAvailable: file.thumbnailAvailable,
+        thumbnailUrl: file.thumbnailUrl || null, // Use thumbnailUrl from backend (preferred)
         url: file.url,
         // Legacy fields for backward compatibility
         name: file.originalName || file.name,
@@ -704,9 +706,11 @@ const DatasetManager = () => {
         totalMapped: list.length,
         filesWithIds: list.filter(f => f.id).length,
         filesWithThumbnails: list.filter(f => f.thumbnailAvailable === true).length,
+        filesWithThumbnailUrl: list.filter(f => f.thumbnailUrl).length,
         sampleMapped: list[0] ? {
           id: list[0].id,
           thumbnailAvailable: list[0].thumbnailAvailable,
+          thumbnailUrl: list[0].thumbnailUrl ? 'present' : 'missing',
           originalName: list[0].originalName
         } : null
       });
@@ -1892,10 +1896,12 @@ const DatasetManager = () => {
   const FileCard = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    // Only attempt thumbnail when backend explicitly marks it as available
-    const thumbEndpoint = datasetId && file.id && isImage
-      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
-      : null;
+    // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+    const thumbEndpoint = isImage && file.thumbnailUrl
+      ? file.thumbnailUrl
+      : (datasetId && file.id && isImage
+        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+        : null);
 
     return (
       <div
@@ -1939,10 +1945,12 @@ const DatasetManager = () => {
   const FileListItem = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    // Only attempt thumbnail when backend explicitly marks it as available
-    const thumbEndpoint = datasetId && file.id && isImage
-      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
-      : null;
+    // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+    const thumbEndpoint = isImage && file.thumbnailUrl
+      ? file.thumbnailUrl
+      : (datasetId && file.id && isImage
+        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+        : null);
 
     return (
       <div
@@ -2518,10 +2526,13 @@ const DatasetManager = () => {
             {/* Full-size Image with Zoom & Pan */}
             {selectedImageFile && (() => {
               const datasetId = selectedVersionDatasetId || currentDatasetId || "";
-              const imageUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
+              // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+              const imageUrl = selectedImageFile.thumbnailUrl
+                ? selectedImageFile.thumbnailUrl
+                : apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
               const fallbackUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
               // Try thumbnail as an additional fallback only when backend marks it as available
-              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id
+              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id && !selectedImageFile.thumbnailUrl
                 ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`)
                 : null;
               

@@ -113,6 +113,13 @@ export interface DetectedClassesResponse {
   classNames: string[];
   totalClasses: number;
   hasCategories: boolean;
+  // Optional sample thumbnails for each class ID (may be missing on older backends)
+  samples?: {
+    classId: number;
+    imageId: string;
+    filename: string;
+    thumbnailUrl: string | null;
+  }[];
 }
 
 export const getDetectedClasses = async (
