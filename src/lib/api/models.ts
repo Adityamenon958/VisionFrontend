@@ -60,3 +60,86 @@ export const getModelInfo = async (
 
   return apiRequest(path);
 };
+
+/**
+ * Scan network for devices with folder access
+ * GET /api/models/:modelId/deploy/scan-devices
+ */
+export const scanNetworkDevices = async (
+  modelId: string,
+  options?: {
+    networkRange?: string;
+    timeout?: number;
+  }
+): Promise<{
+  devices: Array<{
+    ipAddress: string;
+    deviceName?: string;
+    hasFolderAccess: boolean;
+    folderPath?: string;
+    status: "available" | "unavailable" | "checking";
+    lastChecked?: string;
+  }>;
+  total: number;
+  available: number;
+}> => {
+  const params = new URLSearchParams();
+  if (options?.networkRange) {
+    params.append("networkRange", options.networkRange);
+  }
+  if (options?.timeout) {
+    params.append("timeout", options.timeout.toString());
+  }
+  const queryString = params.toString();
+  const path = `/models/${encodeURIComponent(modelId)}/deploy/scan-devices${queryString ? `?${queryString}` : ""}`;
+
+  return apiRequest(path);
+};
+
+/**
+ * Check device by IP address
+ * GET /api/models/:modelId/deploy/check-device
+ */
+export const checkDeviceByIp = async (
+  modelId: string,
+  ipAddress: string
+): Promise<{
+  ipAddress: string;
+  deviceName?: string;
+  hasFolderAccess: boolean;
+  folderPath?: string;
+  status: "available" | "unavailable" | "checking";
+  lastChecked?: string;
+}> => {
+  const path = `/models/${encodeURIComponent(modelId)}/deploy/check-device?ipAddress=${encodeURIComponent(ipAddress)}`;
+
+  return apiRequest(path);
+};
+
+/**
+ * Deploy model to device
+ * POST /api/models/:modelId/deploy
+ */
+export const deployModelToDevice = async (
+  modelId: string,
+  config: {
+    ipAddress: string;
+    folderPath: string;
+    deviceName?: string;
+  }
+): Promise<{
+  deploymentId: string;
+  modelId: string;
+  ipAddress: string;
+  folderPath: string;
+  status: string;
+  message: string;
+  startedAt: string;
+}> => {
+  const path = `/models/${encodeURIComponent(modelId)}/deploy`;
+
+  return apiRequest(path, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+};

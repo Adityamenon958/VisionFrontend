@@ -29,6 +29,7 @@ import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
+import { ModelDeployButton } from "@/components/training/ModelDeployButton";
 import {
   Tooltip,
   TooltipContent,
@@ -1745,15 +1746,21 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                 </div>
                               )}
 
-                              {/* Download Model Button */}
+                              {/* Download Model and Deploy Model Buttons */}
                               {model.modelId && (
-                                <div className="pt-3 border-t">
-                                  <div className="text-xs font-semibold mb-2">Download Model</div>
-                                  <ModelDownloadButton
-                                    modelId={model.modelId}
-                                    modelName={displayName}
-                                    availableFormats={["pt", "onnx", "zip"]}
-                                  />
+                                <div className="pt-3 border-t space-y-3">
+                                  <div className="text-xs font-semibold mb-2">Model Actions</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <ModelDownloadButton
+                                      modelId={model.modelId}
+                                      modelName={displayName}
+                                      availableFormats={["pt", "onnx", "zip"]}
+                                    />
+                                    <ModelDeployButton
+                                      modelId={model.modelId}
+                                      modelName={displayName}
+                                    />
+                                  </div>
                                 </div>
                               )}
                             </div>
