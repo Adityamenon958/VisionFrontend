@@ -30,6 +30,8 @@ import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import { ModelDeployButton } from "@/components/training/ModelDeployButton";
+import { ModelMetricsChatbot } from "@/components/models/ModelMetricsChatbot";
+import { HyperparametersChatbot } from "@/components/training/HyperparametersChatbot";
 import {
   Tooltip,
   TooltipContent,
@@ -1746,6 +1748,11 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                 </div>
                               )}
 
+                              {/* AI Chatbot for Model Analysis */}
+                              {model.modelId && (
+                                <ModelMetricsChatbot model={model} />
+                              )}
+
                               {/* Download Model and Deploy Model Buttons */}
                               {model.modelId && (
                                 <div className="pt-3 border-t space-y-3">
@@ -1850,7 +1857,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                         These are fetched from the backend for the selected model type.
                       </div>
                   </div>
-                  <div>
+                  <div className="flex items-center gap-2">
                       <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -1859,6 +1866,34 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                       />
                         <span>Use defaults</span>
                     </label>
+                    {selectedDatasetId && datasetDetails && (
+                      <HyperparametersChatbot
+                        datasetInfo={{
+                          datasetId: selectedDatasetId,
+                          totalImages: datasetDetails.totalImages,
+                          labeledImages: datasetDetails.labeledImages ?? datasetDetails.trainCount,
+                          unlabeledImages: datasetDetails.unlabeledImages,
+                          version: datasetDetails.version,
+                          status: datasetDetails.status
+                        }}
+                        modelType={modelType}
+                        currentParams={{
+                          epochs,
+                          batchSize,
+                          imgSize,
+                          learningRate,
+                          workers
+                        }}
+                        onParamsSuggested={(params) => {
+                          setEpochs(params.epochs || 100);
+                          setBatchSize(params.batchSize || 16);
+                          setImgSize(params.imgSize || 640);
+                          setLearningRate(params.learningRate || 0.01);
+                          setWorkers(params.workers || 4);
+                          setUseDefaults(false);
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
 
