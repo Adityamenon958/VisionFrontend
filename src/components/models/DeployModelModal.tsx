@@ -42,18 +42,59 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [searchIp, setSearchIp] = useState<string>("");
+  const [selectedFormat, setSelectedFormat] = useState<'pt' | 'onnx'>('pt');
   const [isScanning, setIsScanning] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
+  /**
+   * Calculate network range from IP address
+   * Example: 192.168.1.14 → 192.168.1.0/24
+   */
+  const calculateNetworkRange = (ipAddress: string): string | null => {
+    const parts = ipAddress.trim().split('.');
+    if (parts.length === 4) {
+      // Validate each part is a number between 0-255
+      const isValid = parts.every(part => {
+        const num = parseInt(part, 10);
+        return !isNaN(num) && num >= 0 && num <= 255;
+      });
+      
+      if (isValid) {
+        return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+      }
+    }
+    return null; // Invalid IP format
+  };
+
   const scanNetwork = async () => {
     setIsScanning(true);
     setError(null);
 
     try {
-      const data = await modelsApi.scanNetworkDevices(modelId);
+      // Prepare options for API call
+      const options: {
+        networkRange?: string;
+        folderName?: string;
+      } = {
+        folderName: 'shared models' // Backend expects this parameter
+      };
+
+      // If IP address is entered, calculate network range from it
+      if (searchIp.trim()) {
+        const networkRange = calculateNetworkRange(searchIp.trim());
+        if (networkRange) {
+          options.networkRange = networkRange;
+        } else {
+          // Invalid IP format - show warning but still try to scan
+          setError("Invalid IP format. Scanning default network...");
+        }
+      }
+
+      // Call API with network range and folder name
+      const data = await modelsApi.scanNetworkDevices(modelId, options);
       setDevices(data.devices || []);
     } catch (err) {
       const errorMessage =
@@ -128,6 +169,7 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
         ipAddress: device.ipAddress,
         folderPath: device.folderPath,
         deviceName: device.deviceName,
+        format: selectedFormat,
       });
 
       // Call parent callback
@@ -135,7 +177,7 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
 
       toast({
         title: "Deployment started",
-        description: `Model is being deployed to ${device.ipAddress}`,
+        description: `Model is being deployed to ${device.ipAddress} in ${selectedFormat === 'pt' ? 'PyTorch' : 'ONNX'} format`,
       });
 
       // Close modal on success
@@ -144,6 +186,7 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
       setSelectedDevice(null);
       setDevices([]);
       setSearchIp("");
+      setSelectedFormat('pt');
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to deploy model";
@@ -160,6 +203,7 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
       setSelectedDevice(null);
       setDevices([]);
       setSearchIp("");
+      setSelectedFormat('pt');
       setError(null);
     }
   };
@@ -309,6 +353,48 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
               ))}
             </div>
           </div>
+
+          {/* Format Selection - Only show when device is selected */}
+          {selectedDevice && (
+            <div className="pt-3 border-t">
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-2">
+                  Deploy Format:
+                </label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="format"
+                      value="pt"
+                      checked={selectedFormat === 'pt'}
+                      onChange={() => setSelectedFormat('pt')}
+                      disabled={isDeploying}
+                      className="cursor-pointer"
+                    />
+                    <span>PyTorch (.pt)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="format"
+                      value="onnx"
+                      checked={selectedFormat === 'onnx'}
+                      onChange={() => setSelectedFormat('onnx')}
+                      disabled={isDeploying}
+                      className="cursor-pointer"
+                    />
+                    <span>ONNX (.onnx)</span>
+                  </label>
+                </div>
+                {selectedFormat === 'onnx' && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    ONNX format will be converted automatically if not available
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Action Buttons */}

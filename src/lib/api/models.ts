@@ -70,6 +70,7 @@ export const scanNetworkDevices = async (
   options?: {
     networkRange?: string;
     timeout?: number;
+    folderName?: string;
   }
 ): Promise<{
   devices: Array<{
@@ -89,6 +90,9 @@ export const scanNetworkDevices = async (
   }
   if (options?.timeout) {
     params.append("timeout", options.timeout.toString());
+  }
+  if (options?.folderName) {
+    params.append("folderName", options.folderName);
   }
   const queryString = params.toString();
   const path = `/models/${encodeURIComponent(modelId)}/deploy/scan-devices${queryString ? `?${queryString}` : ""}`;
@@ -126,6 +130,7 @@ export const deployModelToDevice = async (
     ipAddress: string;
     folderPath: string;
     deviceName?: string;
+    format?: 'pt' | 'onnx';
   }
 ): Promise<{
   deploymentId: string;
@@ -140,6 +145,11 @@ export const deployModelToDevice = async (
 
   return apiRequest(path, {
     method: "POST",
-    body: JSON.stringify(config),
+    body: JSON.stringify({
+      ipAddress: config.ipAddress,
+      folderPath: config.folderPath,
+      deviceName: config.deviceName,
+      format: config.format || 'pt', // Default to 'pt' if not provided
+    }),
   });
 };

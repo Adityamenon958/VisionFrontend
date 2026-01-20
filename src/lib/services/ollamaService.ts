@@ -1,7 +1,7 @@
 interface OllamaConfig {
   baseUrl?: string; // Default: http://localhost:11434
   model?: string; // Default: llama3
-  timeout?: number; // Default: 30000ms
+  timeout?: number; // Default: 90000ms (90 seconds - allows time for first model load)
 }
 
 export interface ChatMessage {
@@ -25,7 +25,7 @@ export class OllamaService {
   constructor(config?: OllamaConfig) {
     this.baseUrl = config?.baseUrl || "http://localhost:11434";
     this.model = config?.model || "llama3";
-    this.timeout = config?.timeout || 30000;
+    this.timeout = config?.timeout || 90000; // 90 seconds - allows time for first model load
   }
 
   /**
@@ -72,7 +72,7 @@ export class OllamaService {
   /**
    * Stream chat completion (for real-time responses)
    */
-  async *chatStream(messages: ChatMessage[]): AsyncGenerator<string, void, unknown> {
+  async *chatStream(messages: ChatMessage[], signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: {
@@ -82,7 +82,8 @@ export class OllamaService {
         model: this.model,
         messages: messages,
         stream: true
-      })
+      }),
+      signal
     });
 
     if (!response.ok) {

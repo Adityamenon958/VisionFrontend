@@ -113,6 +113,7 @@ export const apiRequest = async <T>(
   const response = await fetchWithRetry(url, {
     ...options,
     headers: requestHeaders,
+    signal: options.signal, // Pass through abort signal
   });
 
   console.log(`[apiRequest] Response status: ${response.status} for ${url}`);

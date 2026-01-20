@@ -1,19 +1,20 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Sparkles, X, Send, Bot, Check } from "lucide-react";
-import { useOllamaChat } from "@/hooks/useOllamaChat";
+import { Loader2, Sparkles, X, Send, Bot, Check, Square } from "lucide-react";
+import { useAIChat, type AIProvider } from "@/hooks/useAIChat";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { HyperparametersSnapshot } from "@/utils/trainingPersistence";
+import { ProviderSelector } from "@/components/ai/ProviderSelector";
 
 interface HyperparametersChatbotProps {
   datasetInfo: {
@@ -55,10 +56,40 @@ export const HyperparametersChatbot: React.FC<HyperparametersChatbotProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [userInput, setUserInput] = useState("");
   const [suggestedParams, setSuggestedParams] = useState<HyperparametersSnapshot | null>(null);
-
-  const { messages, isLoading, isConnected, sendMessage, clearMessages } = useOllamaChat({
-    systemPrompt: SYSTEM_PROMPT
+  const [provider, setProvider] = useState<AIProvider>(() => {
+    const stored = window.localStorage.getItem("aiProvider");
+    return stored === "gemini" || stored === "ollama" ? stored : "ollama";
   });
+
+  const buildDatasetContext = () => {
+    return {
+      datasetSize: datasetInfo.totalImages || 0,
+      numClasses: 3,
+      avgImageResolution: "1280x720",
+      hardware: "CPU",
+    };
+  };
+
+  const {
+    messages,
+    isLoading,
+    isAvailable,
+    sendMessage,
+    clearMessages,
+    stop,
+    lastProvider,
+    isOllamaAvailable,
+    isGeminiAvailable,
+  } = useAIChat({
+    provider,
+    source: "training_config",
+    contextBuilder: buildDatasetContext,
+    systemPrompt: SYSTEM_PROMPT,
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem("aiProvider", provider);
+  }, [provider]);
 
   const buildDatasetPrompt = () => {
     const datasetSummary = {
@@ -98,6 +129,8 @@ Please suggest optimal hyperparameters and provide:
 2. Brief explanation for each recommendation
 3. Expected training time estimate (if possible)
 4. Any warnings or considerations
+5. You are an AI assistant helping a non-technical user.
+6. Answer the questions in short and simple language.
 
 After your explanation, provide the parameters in JSON format like this:
 {
@@ -117,7 +150,7 @@ After your explanation, provide the parameters in JSON format like this:
   };
 
   const handleAnalyze = async () => {
-    if (!isConnected) {
+    if (!isAvailable) {
       return;
     }
 
@@ -147,7 +180,7 @@ After your explanation, provide the parameters in JSON format like this:
   };
 
   const handleSend = async () => {
-    if (!userInput.trim() || isLoading || !isConnected) return;
+    if (!userInput.trim() || isLoading || !isAvailable) return;
 
     const input = userInput.trim();
     setUserInput("");
@@ -168,26 +201,33 @@ After your explanation, provide the parameters in JSON format like this:
         size="sm"
         onClick={() => setIsOpen(true)}
         className="gap-2"
-        disabled={isConnected === false}
+        disabled={isAvailable === false}
       >
         <Sparkles className="h-4 w-4" />
         Ask AI
       </Button>
 
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[80vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+      <Sheet open={isOpen} onOpenChange={setIsOpen}>
+        <SheetContent side="right" className="flex flex-col sm:max-w-2xl w-full sm:w-[600px]">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5" />
               AI Parameter Suggestions
-            </DialogTitle>
-            <DialogDescription>
+            </SheetTitle>
+            <SheetDescription>
               Get AI-powered hyperparameter recommendations based on your dataset
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+            <ProviderSelector
+              provider={provider}
+              onProviderChange={setProvider}
+              isOllamaAvailable={isOllamaAvailable}
+              isGeminiAvailable={isGeminiAvailable}
+            />
+          </SheetHeader>
 
-          <ScrollArea className="flex-1 min-h-[300px] max-h-[400px] pr-4">
-            <div className="space-y-4">
+          <div className="flex-1 overflow-hidden">
+            <ScrollArea className="h-full pr-4">
+              <div className="space-y-4">
               {messages.length === 0 && !isLoading && (
                 <div className="text-sm text-muted-foreground text-center py-8">
                   Click &quot;Analyze Dataset&quot; to get AI suggestions for optimal hyperparameters.
@@ -216,6 +256,11 @@ After your explanation, provide the parameters in JSON format like this:
                     )}
                   >
                     <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+                    {message.role === "assistant" && lastProvider && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        ({lastProvider === "gemini" ? "Gemini" : "Ollama"})
+                      </div>
+                    )}
                   </div>
                   {message.role === "user" && (
                     <div className="flex-shrink-0">
@@ -281,8 +326,9 @@ After your explanation, provide the parameters in JSON format like this:
                   </div>
                 </div>
               )}
-            </div>
-          </ScrollArea>
+              </div>
+            </ScrollArea>
+          </div>
 
           <div className="space-y-2 pt-4 border-t">
             <div className="flex gap-2">
@@ -297,11 +343,11 @@ After your explanation, provide the parameters in JSON format like this:
                 }}
                 placeholder="Ask about specific parameters..."
                 className="min-h-[60px] resize-none"
-                disabled={isLoading || !isConnected}
+                disabled={isLoading || !isAvailable}
               />
               <Button
                 onClick={handleSend}
-                disabled={!userInput.trim() || isLoading || !isConnected}
+                disabled={!userInput.trim() || isLoading || !isAvailable}
                 size="icon"
                 className="self-end"
               >
@@ -310,18 +356,29 @@ After your explanation, provide the parameters in JSON format like this:
             </div>
           </div>
 
-          <DialogFooter className="flex-row justify-between items-center">
+          <SheetFooter className="flex-row justify-between items-center">
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAnalyze}
-                disabled={isLoading || !isConnected}
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                Analyze Dataset
-              </Button>
-              {suggestedParams && onParamsSuggested && (
+              {isLoading ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={stop}
+                >
+                  <Square className="h-4 w-4 mr-2" />
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAnalyze}
+                  disabled={!isAvailable}
+                >
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  Analyze Dataset
+                </Button>
+              )}
+              {suggestedParams && onParamsSuggested && !isLoading && (
                 <Button
                   variant="default"
                   size="sm"
@@ -335,9 +392,9 @@ After your explanation, provide the parameters in JSON format like this:
             <Button variant="outline" onClick={() => setIsOpen(false)}>
               Close
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </>
   );
 };
