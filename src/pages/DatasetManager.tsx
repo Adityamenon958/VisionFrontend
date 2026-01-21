@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/hooks/useProfile";
+import { getAuthHeaders } from "@/lib/api/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -256,14 +257,7 @@ const DatasetManager = () => {
   } | null>(null);
   const [loadingDependencies, setLoadingDependencies] = useState<boolean>(false);
 
-  // ------- Auth header helper -------
-  const getAuthHeaders = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-  };
+  // Removed local getAuthHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Process thumbnail queue when slots become available (throttled to prevent backend overload)
   const processThumbnailQueue = useCallback(() => {

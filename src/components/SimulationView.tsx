@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
+import { getAuthHeaders } from "@/lib/api/config";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import { ModelDeployButton } from "@/components/training/ModelDeployButton";
 import { ModelMetricsChatbot } from "@/components/models/ModelMetricsChatbot";
@@ -192,13 +193,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   };
 
   // helper headers
-  const getFetchHeaders = () => {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (profile?.access_token) {
-      headers["Authorization"] = `Bearer ${profile.access_token}`;
-    }
-    return headers;
-  };
+  // Removed local getFetchHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Delete a trained model by modelId using DELETE /api/models/:modelId
   const handleDeleteModel = async () => {
@@ -208,9 +203,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     setDeletingModelId(modelId);
     try {
       const url = `${API_BASE}/models/${encodeURIComponent(modelId)}`;
+      const headers = await getAuthHeaders();
       const resp = await fetch(url, {
         method: "DELETE",
-        headers: getFetchHeaders(),
+        headers,
       });
 
       if (!resp.ok) {
@@ -277,7 +273,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/datasets?${qs.toString()}`;
       console.info("[fetchDatasets] url:", url, { selectedProjectObj });
 
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         const body = await resp.text().catch(() => "<unreadable>");
@@ -371,7 +368,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/dataset/${encodeURIComponent(datasetId)}`;
       console.info("[fetchDatasetDetails] url:", url);
 
-      const resp = await fetch(url, { headers: getFetchHeaders(), signal: abort.signal });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers, signal: abort.signal });
 
       if (!resp.ok) {
         if (resp.status === 404) {
@@ -436,7 +434,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           ? `${API_BASE}/train/base-models?${qs.toString()}`
           : `${API_BASE}/train/base-models`;
       console.info("[fetchBaseModels] url:", url);
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         console.warn("[fetchBaseModels] non-ok:", resp.status);
@@ -541,7 +540,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/models?${qs.toString()}`;
       console.info("[fetchTrainedModels] url:", url);
 
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
       if (!resp.ok) {
         throw new Error(`Failed to load trained models (${resp.status})`);
       }
@@ -563,7 +563,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     try {
       const url = `${API_BASE}/train/defaults?modelType=${encodeURIComponent(mType)}`;
       console.info("[fetchDefaultParams] url:", url);
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         console.warn("[fetchDefaultParams] non-ok:", resp.status);
@@ -691,8 +692,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
       try {
         // Fetch current status from backend
+        const headers = await getAuthHeaders();
         const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(savedState.jobId)}/status`, {
-          headers: getFetchHeaders(),
+          headers,
         });
 
         if (!resp.ok) {
@@ -908,9 +910,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     setLogs([]);
 
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -967,8 +970,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
     const fetchStatusAndMaybeLogs = async () => {
       try {
+        const headers = await getAuthHeaders();
         const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobIdToPoll)}/status`, {
-          headers: getFetchHeaders(),
+          headers,
         });
         
         if (!resp.ok) {
@@ -1120,8 +1124,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     const abort = new AbortController();
     logsAbortRef.current = abort;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobIdToPoll)}/logs?limit=${limit}`, {
-        headers: getFetchHeaders(),
+        headers,
         signal: abort.signal,
       });
       if (!resp.ok) throw new Error(`Failed to fetch logs (${resp.status})`);
@@ -1163,9 +1168,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const cancelJob = async () => {
     if (!jobId) return;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -1194,9 +1200,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const retryJob = async () => {
     if (!jobId) return;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobId)}/retry`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) throw new Error(json?.error ?? `Retry failed (${resp.status})`);

@@ -40,21 +40,20 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     projectsThisWeek,
     datasets,
     newDatasets,
+    completedInferences,
     lastPrediction,
     loading,
     error,
   } = useDashboardMetrics(projects, profile?.company_id || null);
 
   // Format last prediction display
-  const lastPredictionDisplay = lastPrediction?.imagesAnalyzed
-    ? `${lastPrediction.imagesAnalyzed} images analyzed`
-    : "No predictions yet → Run your first prediction";
+  // For the prediction card, show the total number of completed inferences
+  const lastPredictionDisplay = String(completedInferences);
 
-  const lastPredictionSubtitle = lastPrediction?.status
-    ? `Status: ${lastPrediction.status.charAt(0).toUpperCase() + lastPrediction.status.slice(1)}`
-    : lastPrediction?.imagesAnalyzed
-    ? "Status: Completed"
-    : undefined;
+  const lastPredictionSubtitle =
+    completedInferences > 0
+      ? "Completed inferences across all projects"
+      : "No inferences completed yet";
 
   // Quick action handlers
   const handleCreateProject = () => {
@@ -117,7 +116,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             accentColor="blue"
           />
           <MetricCard
-            title="Datasets"
+            title="Trained Models"
             value={datasets}
             subtitle={newDatasets > 0 ? `${newDatasets} new` : undefined}
             icon={Database}
@@ -130,14 +129,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             title="Last Prediction"
             value={lastPredictionDisplay}
             subtitle={lastPredictionSubtitle}
-            icon={lastPrediction?.status === "completed" || lastPrediction?.imagesAnalyzed ? CheckCircle2 : Clock}
+            icon={completedInferences > 0 ? CheckCircle2 : Clock}
             iconColor={
-              lastPrediction?.status === "completed" || lastPrediction?.imagesAnalyzed
+              completedInferences > 0
                 ? "text-green-600 dark:text-green-400"
                 : "text-muted-foreground"
             }
             loading={loading}
-            error={false} // Don't show error for predictions (optional data)
+            error={false} // Don't show error for prediction metrics (optional data)
             accentColor="primary"
           />
         </div>

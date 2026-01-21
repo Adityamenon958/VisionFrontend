@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { startOfWeek, isAfter, isWithinInterval } from "date-fns";
+import { useProfile } from "@/hooks/useProfile";
+import { apiUrl, getAuthHeaders } from "@/lib/api/config";
 
 interface LastPrediction {
   imagesAnalyzed: number | null;
@@ -13,6 +14,7 @@ interface DashboardMetrics {
   projectsThisWeek: number;
   datasets: number;
   newDatasets: number;
+  completedInferences: number;
   lastPrediction: LastPrediction | null;
   loading: boolean;
   error: string | null;
@@ -33,8 +35,10 @@ export const useDashboardMetrics = (
   projects: any[],
   companyId: string | null
 ): DashboardMetrics => {
+  const { profile, company } = useProfile();
   const [datasets, setDatasets] = useState<number>(0);
   const [newDatasets, setNewDatasets] = useState<number>(0);
+  const [completedInferences, setCompletedInferences] = useState<number>(0);
   const [lastPrediction, setLastPrediction] = useState<LastPrediction | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,11 +55,13 @@ export const useDashboardMetrics = (
     });
   }).length;
 
-  // Fetch datasets from Supabase
+  // Fetch summary metrics from dashboard overview endpoint
   useEffect(() => {
     if (!companyId) {
       setDatasets(0);
       setNewDatasets(0);
+      setCompletedInferences(0);
+      setLastPrediction(null);
       setLoading(false);
       return;
     }
@@ -63,98 +69,101 @@ export const useDashboardMetrics = (
     setLoading(true);
     setError(null);
 
-    const fetchDatasets = async () => {
+    const fetchOverview = async () => {
       try {
-        const { data, error: fetchError } = await supabase
-          .from("datasets")
-          .select("id, created_at")
-          .eq("company_id", companyId);
+        // Derive company name for the overview API
+        const companyName =
+          company?.name ||
+          (profile as any)?.companies?.name ||
+          "";
 
-        if (fetchError) {
-          console.error("Error fetching datasets:", fetchError);
-          setError("Failed to load datasets");
+        if (!companyName) {
+          setDatasets(0);
+          setNewDatasets(0);
+          setCompletedInferences(0);
+          setLastPrediction(null);
           setLoading(false);
           return;
         }
 
-        const datasetsCount = data?.length || 0;
-        setDatasets(datasetsCount);
+        const headers = await getAuthHeaders();
+        const params = new URLSearchParams({
+          company: String(companyName),
+        });
+        const url = apiUrl(`/dashboard/overview?${params.toString()}`);
 
-        // Calculate new datasets this week
-        const weekStartDate = startOfWeek(new Date(), { weekStartsOn: 1 });
-        const newDatasetsCount = data?.filter((dataset) => {
-          if (!dataset.created_at) return false;
-          const createdDate = new Date(dataset.created_at);
-          return isAfter(createdDate, weekStartDate) || isWithinInterval(createdDate, {
-            start: weekStartDate,
-            end: new Date(),
+        const resp = await fetch(url, { headers });
+        if (!resp.ok) {
+          console.error("Error fetching dashboard overview:", resp.status);
+          setError("Failed to load dashboard overview");
+          setDatasets(0);
+          setNewDatasets(0);
+          setCompletedInferences(0);
+          setLastPrediction(null);
+          setLoading(false);
+          return;
+        }
+
+        const json = await resp.json();
+        const summary = json.summary || {};
+
+        // Use trained models count for the middle card (instead of raw datasets)
+        const modelsCount =
+          summary.totalModels ??
+          summary.modelsCount ??
+          0;
+        setDatasets(modelsCount);
+
+        // We currently don't have \"new models this week\" in the summary;
+        // keep this as 0 for now to avoid guessing.
+        setNewDatasets(0);
+
+        // Completed inferences across all projects (from inferenceJobsByStatus.completed)
+        const inferenceByStatus = json.inferenceJobsByStatus || {};
+        const completedCount =
+          inferenceByStatus.completed !== undefined
+            ? Number(inferenceByStatus.completed) || 0
+            : 0;
+        setCompletedInferences(completedCount);
+
+        // Map lastPrediction into the local shape if present
+        if (json.lastPrediction) {
+          const latest = json.lastPrediction;
+          setLastPrediction({
+            imagesAnalyzed:
+              latest.totalImages ||
+              latest.imagesAnalyzed ||
+              latest.imageCount ||
+              null,
+            status: latest.status || "completed",
+            timestamp:
+              latest.createdAt ||
+              latest.timestamp ||
+              latest.created_at ||
+              null,
           });
-        }).length || 0;
-        setNewDatasets(newDatasetsCount);
+        } else {
+          setLastPrediction(null);
+        }
       } catch (err) {
-        console.error("Error in fetchDatasets:", err);
-        setError("Failed to load datasets");
+        console.error("Error in fetchOverview:", err);
+        setError("Failed to load dashboard overview");
+        setCompletedInferences(0);
+        setLastPrediction(null);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchDatasets();
-  }, [companyId]);
-
-  // Fetch last prediction from backend API (optional - doesn't affect loading state)
-  useEffect(() => {
-    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
-    if (!apiBaseUrl || !companyId) {
-      // No API URL configured or no company - skip prediction fetch
-      return;
-    }
-
-    const fetchLastPrediction = async () => {
-      try {
-        const url = `${apiBaseUrl.replace(/\/+$/, "")}/inference/history?limit=1`;
-        const response = await fetch(url, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        });
-
-        // If endpoint doesn't exist or fails, just skip (don't show error)
-        if (!response.ok) {
-          // Endpoint might not exist - that's okay
-          return;
-        }
-
-        const data = await response.json();
-        
-        // Handle different response formats
-        const predictions = Array.isArray(data) 
-          ? data 
-          : data.predictions || data.history || data.results || [];
-
-        if (predictions.length > 0) {
-          const latest = predictions[0];
-          setLastPrediction({
-            imagesAnalyzed: latest.totalImages || latest.imagesAnalyzed || latest.imageCount || null,
-            status: latest.status || "completed",
-            timestamp: latest.createdAt || latest.timestamp || latest.created_at || null,
-          });
-        }
-      } catch (err) {
-        // Silently fail - prediction data is optional
-        console.debug("Could not fetch last prediction:", err);
-      }
-    };
-
-    fetchLastPrediction();
-  }, [companyId]);
+    fetchOverview();
+  }, [companyId, company, profile]);
 
   return {
     activeProjects,
     projectsThisWeek,
     datasets,
     newDatasets,
+    completedInferences,
     lastPrediction,
     loading,
     error,

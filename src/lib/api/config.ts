@@ -15,23 +15,165 @@ export const apiUrl = (path: string): string => {
 };
 
 /**
+ * Cache for user profile data to avoid repeated Supabase calls
+ */
+interface CachedProfile {
+  id: string;
+  email: string;
+  role: string;
+  company_id: string | null;
+  company: string | null;
+  timestamp: number;
+}
+
+let cachedProfile: CachedProfile | null = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Clear the authentication cache
+ * Call this after profile updates, role changes, etc.
+ */
+export const clearAuthCache = () => {
+  cachedProfile = null;
+};
+
+/**
  * Get authentication headers for API requests
+ * Includes user information in custom headers for backend authentication
  */
 export const getAuthHeaders = async (): Promise<HeadersInit> => {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const token = session?.access_token;
+  try {
+    // Get Supabase session
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-  };
+    if (!session) {
+      throw new Error("Not authenticated");
+    }
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+    const token = session?.access_token;
+    const userId = session.user.id;
+
+    // Check cache
+    const now = Date.now();
+    if (cachedProfile && (now - cachedProfile.timestamp) < CACHE_DURATION) {
+      // Use cached data
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        "X-User-Id": cachedProfile.id,
+        "X-User-Role": cachedProfile.role,
+        "X-User-Email": cachedProfile.email,
+      };
+
+      if (cachedProfile.company_id) {
+        headers["X-User-Company-Id"] = cachedProfile.company_id;
+      }
+      // Always send X-User-Company (required by backend, empty string if no company)
+      headers["X-User-Company"] = cachedProfile.company || "";
+
+      return headers;
+    }
+
+    // Fetch fresh profile data
+    let profile: any = null;
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, email, role, company_id")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (!error && data) {
+        profile = data;
+      }
+    } catch (profileError) {
+      console.warn("[getAuthHeaders] Could not fetch profile:", profileError);
+      // Continue with session data only
+    }
+
+    // Get company name if company_id exists
+    let companyName: string | null = null;
+    if (profile?.company_id) {
+      try {
+        const { data: companyData } = await supabase
+          .from("companies")
+          .select("name")
+          .eq("id", profile.company_id)
+          .maybeSingle();
+
+        companyName = companyData?.name || null;
+      } catch (companyError) {
+        console.warn("[getAuthHeaders] Could not fetch company:", companyError);
+        // Continue without company name
+      }
+    }
+
+    // Update cache
+    if (profile) {
+      cachedProfile = {
+        id: profile.id || userId,
+        email: profile.email || session.user.email || "",
+        role: profile.role || "viewer",
+        company_id: profile.company_id || null,
+        company: companyName,
+        timestamp: now,
+      };
+    } else {
+      // Cache fallback data
+      cachedProfile = {
+        id: userId,
+        email: session.user.email || "",
+        role: "viewer",
+        company_id: null,
+        company: null,
+        timestamp: now,
+      };
+    }
+
+    // Build headers
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    };
+
+    if (profile) {
+      headers["X-User-Id"] = profile.id || userId;
+      headers["X-User-Role"] = profile.role || "viewer";
+      headers["X-User-Email"] = profile.email || session.user.email || "";
+
+      if (profile.company_id) {
+        headers["X-User-Company-Id"] = profile.company_id;
+      }
+      // Always send X-User-Company (required by backend, empty string if no company)
+      headers["X-User-Company"] = companyName || "";
+    } else {
+      // Fallback if profile fetch fails
+      headers["X-User-Id"] = userId;
+      headers["X-User-Email"] = session.user.email || "";
+      headers["X-User-Role"] = "viewer";
+      // Always send X-User-Company (required by backend)
+      headers["X-User-Company"] = "";
+    }
+
+    return headers;
+  } catch (error) {
+    console.error("[getAuthHeaders] Error:", error);
+    // Return minimal headers to prevent complete failure
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return {
+      "Content-Type": "application/json",
+      "Authorization": session?.access_token ? `Bearer ${session.access_token}` : "",
+      "X-User-Id": session?.user?.id || "",
+      "X-User-Role": "viewer",
+      "X-User-Email": session?.user?.email || "",
+      "X-User-Company": "", // Always send (required by backend)
+    };
   }
-
-  return headers;
 };
 
 /**
@@ -120,9 +262,33 @@ export const apiRequest = async <T>(
 
   // Handle 401 Unauthorized
   if (response.status === 401) {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
-    throw new Error("Unauthorized - please log in again");
+    // Check if session is still valid
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (!session) {
+      // Session expired, redirect to login
+      clearAuthCache();
+      await supabase.auth.signOut();
+      window.location.href = "/login";
+      throw new Error("Unauthorized - please log in again");
+    }
+
+    // Try to refresh session
+    const { data: { session: newSession }, error: refreshError } =
+      await supabase.auth.refreshSession();
+
+    if (newSession && !refreshError) {
+      // Session refreshed, clear cache
+      clearAuthCache();
+      // Throw error to let caller handle retry if needed
+      throw new Error("Session refreshed - please retry");
+    } else {
+      // Refresh failed, redirect to login
+      clearAuthCache();
+      await supabase.auth.signOut();
+      window.location.href = "/login";
+      throw new Error("Unauthorized - please log in again");
+    }
   }
 
   if (!response.ok) {

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useProfile } from "@/hooks/useProfile";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
 import { supabase } from "@/integrations/supabase/client";
+import { getAuthHeaders } from "@/lib/api/config";
 import { PageHeader } from "@/components/pages/PageHeader";
 import {
   Card,
@@ -384,14 +385,7 @@ const PredictionPage = () => {
 
   const navigate = useNavigate();
 
-  // Auth header helper
-  const getAuthHeaders = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-  };
+  // Removed local getAuthHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Get company name
   const companyName = company?.name || profile?.companies?.name || "";

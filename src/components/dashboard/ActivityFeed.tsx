@@ -4,6 +4,8 @@ import { FolderKanban, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActivityItem, type Activity } from "./ActivityItem";
+import { useProfile } from "@/hooks/useProfile";
+import { getAuthHeaders, apiUrl } from "@/lib/api/config";
 
 interface ActivityFeedProps {
   projects: any[];
@@ -24,6 +26,7 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({
   companyId,
 }) => {
   const navigate = useNavigate();
+  const { profile, company } = useProfile();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -39,7 +42,7 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({
       const allActivities: Activity[] = [];
 
       try {
-        // 1. Fetch project creation events from Supabase
+        // 1. Fetch project creation events (using already-loaded projects)
         // Use projects prop (already loaded) to avoid duplicate fetch
         try {
           const projectActivities: Activity[] = projects
@@ -60,52 +63,82 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({
           // Continue even if projects fail - we might have predictions
         }
 
-        // 2. Try to fetch prediction events from backend API (optional)
+        // 2. Fetch activity events from backend dashboard API (optional)
         try {
-          const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
-          if (apiBaseUrl) {
-            const url = `${apiBaseUrl.replace(/\/+$/, "")}/inference/history?limit=5`;
+          // Derive company name for the dashboard activity API
+          const companyName =
+            company?.name ||
+            // some profiles embed company under companies
+            (profile as any)?.companies?.name ||
+            "";
+
+          if (companyName) {
+            const headers = await getAuthHeaders();
+            const params = new URLSearchParams({
+              company: String(companyName),
+              limit: "5",
+            });
+            const url = apiUrl(`/dashboard/activity?${params.toString()}`);
+
             const response = await fetch(url, {
               method: "GET",
-              headers: {
-                "Content-Type": "application/json",
-              },
+              headers,
             });
 
             // Only process if request succeeds
             if (response.ok) {
               const data = await response.json();
-              
-              // Handle different response formats
-              const predictions = Array.isArray(data)
-                ? data
-                : data.predictions || data.history || data.results || [];
 
-              const predictionActivities: Activity[] = predictions
-                .slice(0, 3) // Limit to 3 most recent predictions
-                .map((prediction: any, index: number) => {
-                  const imagesCount = prediction.totalImages || 
-                                    prediction.imagesAnalyzed || 
-                                    prediction.imageCount || 
-                                    0;
-                  const projectName = prediction.projectName || 
-                                    prediction.project || 
-                                    "Project";
-                  
+              const activitiesFromApi = Array.isArray(data.activities)
+                ? data.activities
+                : [];
+
+              const mappedActivities: Activity[] = activitiesFromApi.map(
+                (item: any, index: number) => {
+                  const action = item.action as string | undefined;
+                  const resourceType = item.resourceType as string | undefined;
+                  const timestamp =
+                    item.timestamp || new Date().toISOString();
+                  const projName =
+                    item.project ||
+                    (item.details && item.details.projectName) ||
+                    "Project";
+
+                  // Basic label mapping based on action + resourceType
+                  let description = "Activity";
+                  if (resourceType === "dataset") {
+                    if (action === "create") description = "Dataset uploaded";
+                    else if (action === "update") description = "Dataset updated";
+                    else if (action === "delete") description = "Dataset deleted";
+                    else description = "Dataset activity";
+                  } else if (resourceType === "training") {
+                    if (action === "execute") description = "Training job executed";
+                    else if (action === "create") description = "Training job created";
+                    else description = "Training activity";
+                  } else if (resourceType === "inference") {
+                    if (action === "execute") description = "Inference run";
+                    else description = "Inference activity";
+                  } else if (resourceType === "user") {
+                    if (action === "create") description = "Member added";
+                    else if (action === "delete") description = "Member removed";
+                    else description = "User activity";
+                  } else if (resourceType === "project") {
+                    if (action === "create") description = "New project created";
+                    else description = "Project activity";
+                  }
+
                   return {
-                    id: `prediction-${prediction.inferenceId || prediction.id || index}`,
-                    type: "prediction" as const,
-                    description: `${imagesCount} images analyzed in ${projectName}`,
-                    timestamp: prediction.createdAt || 
-                              prediction.timestamp || 
-                              prediction.created_at || 
-                              new Date().toISOString(),
-                    icon: Camera,
-                    projectName: projectName,
+                    id: item.logId || `activity-${index}`,
+                    type: "prediction" as const, // reuse prediction styling for now
+                    description,
+                    timestamp,
+                    icon: resourceType === "inference" ? Camera : FolderKanban,
+                    projectName: projName,
                   };
-                });
+                }
+              );
 
-              allActivities.push(...predictionActivities);
+              allActivities.push(...mappedActivities);
             }
           }
         } catch (error) {

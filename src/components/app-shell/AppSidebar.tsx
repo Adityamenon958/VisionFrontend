@@ -43,7 +43,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { profile, isAdmin, company, loading: profileLoading } = useProfile();
+  const { profile, isAdmin, company, loading: profileLoading, hasPermission, userRole } = useProfile();
   const { toast } = useToast();
   const { isOpen, toggleSidebar } = useSidebar();
   const isMobile = useIsMobile();
@@ -173,7 +173,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
         active: location.pathname === `/dataset/${p.id}`,
       })) : [],
     },
-    ...(isAdmin && companyId
+    ...(hasPermission("manageWorkspaceUsers") && companyId
       ? [
           {
             label: "Team",
@@ -490,7 +490,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                         Prediction (Testing)
                       </Button>
 
-                      {isAdmin && companyId && (
+                      {hasPermission("manageWorkspaceUsers") && companyId && (
                         <Button
                           variant="ghost"
                           size="sm"
