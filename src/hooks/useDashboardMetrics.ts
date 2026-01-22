@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { startOfWeek, isAfter, isWithinInterval } from "date-fns";
 import { useProfile } from "@/hooks/useProfile";
 import { apiUrl, getAuthHeaders } from "@/lib/api/config";
+import { useBackendStatus } from "@/hooks/useBackendStatus";
 
 interface LastPrediction {
   imagesAnalyzed: number | null;
@@ -36,12 +37,14 @@ export const useDashboardMetrics = (
   companyId: string | null
 ): DashboardMetrics => {
   const { profile, company } = useProfile();
+  const { isOnline, wasOffline } = useBackendStatus();
   const [datasets, setDatasets] = useState<number>(0);
   const [newDatasets, setNewDatasets] = useState<number>(0);
   const [completedInferences, setCompletedInferences] = useState<number>(0);
   const [lastPrediction, setLastPrediction] = useState<LastPrediction | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const fetchTriggerRef = useRef<number>(0);
 
   // Calculate projects metrics (no fetch needed)
   const activeProjects = projects.length;
@@ -63,6 +66,13 @@ export const useDashboardMetrics = (
       setCompletedInferences(0);
       setLastPrediction(null);
       setLoading(false);
+      return;
+    }
+
+    // Don't fetch if backend is offline (unless it just came online)
+    if (!isOnline && !wasOffline) {
+      // Backend is offline and wasn't just detected as coming online
+      // Keep existing data, don't show error
       return;
     }
 
@@ -156,7 +166,9 @@ export const useDashboardMetrics = (
     };
 
     fetchOverview();
-  }, [companyId, company, profile]);
+    // Increment trigger ref to force re-fetch when backend comes online
+    fetchTriggerRef.current += 1;
+  }, [companyId, company, profile, isOnline, wasOffline]);
 
   return {
     activeProjects,

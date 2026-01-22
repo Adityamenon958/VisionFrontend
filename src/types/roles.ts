@@ -17,8 +17,13 @@ export interface RolePermissions {
   assignRoles: boolean;
   deleteProjects: boolean;
 
+  // Dataset Management (granular permissions)
+  uploadDatasets: boolean;        // Upload and manage datasets
+  deleteDatasets: boolean;         // Delete datasets
+  viewRawDatasetImages: boolean;  // View raw images in datasets (configurable for Viewer)
+  annotateDatasets: boolean;       // Annotate datasets (create/edit annotations)
+
   // ML Engineer permissions
-  manageDatasets: boolean;
   startTraining: boolean;
   tuneHyperparameters: boolean;
   viewTrainingMetrics: boolean;
@@ -27,6 +32,7 @@ export interface RolePermissions {
   runInference: boolean;
   monitorInference: boolean;
   viewInferenceResults: boolean;
+  deleteOwnInference: boolean; // Delete only inference jobs created by the user
 
   // Viewer permissions
   viewProjects: boolean;

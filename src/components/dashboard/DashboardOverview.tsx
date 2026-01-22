@@ -8,6 +8,7 @@ import { QuickActionCard } from "./QuickActionCard";
 import { ActivityFeed } from "./ActivityFeed";
 import { useDashboardMetrics } from "@/hooks/useDashboardMetrics";
 import { useToast } from "@/hooks/use-toast";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 
 interface DashboardOverviewProps {
   projects: any[];
@@ -151,32 +152,40 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         <section className="lg:col-span-2" aria-label="Quick actions">
           <h2 className="text-lg font-semibold mb-5 text-foreground">Quick Actions</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <QuickActionCard
-              title="Create New Project"
-              description="Set up a new computer vision project."
-              icon={FolderKanban}
-              onClick={handleCreateProject}
-              isPrimary={true}
-            />
-            <QuickActionCard
-              title="Upload Dataset"
-              description="Add images and annotations for training."
-              icon={Upload}
-              onClick={handleUploadDataset}
-              disabled={projects.length === 0}
-            />
-            <QuickActionCard
-              title="Start Training"
-              description="Begin training a new AI model."
-              icon={Settings}
-              onClick={handleStartTraining}
-            />
-            <QuickActionCard
-              title="Run Prediction"
-              description="Analyze new data with your models."
-              icon={Camera}
-              onClick={handleRunPrediction}
-            />
+            <ProtectedComponent requiredPermission="manageProjects">
+              <QuickActionCard
+                title="Create New Project"
+                description="Set up a new computer vision project."
+                icon={FolderKanban}
+                onClick={handleCreateProject}
+                isPrimary={true}
+              />
+            </ProtectedComponent>
+            <ProtectedComponent requiredPermission="uploadDatasets">
+              <QuickActionCard
+                title="Upload Dataset"
+                description="Add images and annotations for training."
+                icon={Upload}
+                onClick={handleUploadDataset}
+                disabled={projects.length === 0}
+              />
+            </ProtectedComponent>
+            <ProtectedComponent requiredPermission="startTraining">
+              <QuickActionCard
+                title="Start Training"
+                description="Begin training a new AI model."
+                icon={Settings}
+                onClick={handleStartTraining}
+              />
+            </ProtectedComponent>
+            <ProtectedComponent requiredPermission="runInference">
+              <QuickActionCard
+                title="Run Prediction"
+                description="Analyze new data with your models."
+                icon={Camera}
+                onClick={handleRunPrediction}
+              />
+            </ProtectedComponent>
           </div>
         </section>
 

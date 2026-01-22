@@ -29,6 +29,7 @@ import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { getAuthHeaders } from "@/lib/api/config";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import { ModelDeployButton } from "@/components/training/ModelDeployButton";
 import { ModelMetricsChatbot } from "@/components/models/ModelMetricsChatbot";
@@ -1374,27 +1375,28 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
         {/* Phase 2: Annotate Data button - show for unlabeled datasets */}
         {selectedDatasetId &&
-          datasetDetails?.unlabeledImages > 0 &&
-         (
-            <motion.div
-              key="annotation-toggle"
-              variants={fadeInUpVariants}
-              initial="hidden"
-              animate="visible"
-            >
-              <div className="flex justify-end">
-                <Button
-                  variant="outline"
-                  type="button"
-                  onClick={() => {
-                    // Phase 2: Navigate to annotation page for this dataset version
-                    navigate(`/annotation/${selectedDatasetId}`);
-                  }}
-                >
-                  Annotate Data
-                </Button>
-              </div>
-            </motion.div>
+          datasetDetails?.unlabeledImages > 0 && (
+            <ProtectedComponent requiredPermission="annotateDatasets">
+              <motion.div
+                key="annotation-toggle"
+                variants={fadeInUpVariants}
+                initial="hidden"
+                animate="visible"
+              >
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => {
+                      // Phase 2: Navigate to annotation page for this dataset version
+                      navigate(`/annotation/${selectedDatasetId}`);
+                    }}
+                  >
+                    Annotate Data
+                  </Button>
+                </div>
+              </motion.div>
+            </ProtectedComponent>
           )}
 
         {/* Training view content */}
@@ -2342,19 +2344,21 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
             modelType &&
             !isSimulating &&
             !jobId && (
-              <motion.div
-                key="start-training"
-                variants={fadeInUpVariants}
-                initial="hidden"
-                animate="visible"
-                exit="hidden"
-                className="flex justify-end"
-              >
-                <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
-                  <Play className="h-4 w-4" />
-                  Start Training
-                </Button>
-              </motion.div>
+              <ProtectedComponent requiredPermission="startTraining">
+                <motion.div
+                  key="start-training"
+                  variants={fadeInUpVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="hidden"
+                  className="flex justify-end"
+                >
+                  <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
+                    <Play className="h-4 w-4" />
+                    Start Training
+                  </Button>
+                </motion.div>
+              </ProtectedComponent>
             )}
         </AnimatePresence>
           </>

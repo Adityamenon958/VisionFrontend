@@ -47,6 +47,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { fadeInUpVariants, staggerContainerVariants } from "@/utils/animations";
 import { ClassNameDialog } from "@/components/dataset/ClassNameDialog";
 import { getDetectedClasses, type DetectedClassesResponse } from "@/lib/api/categories";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim();
 const apiUrl = (path: string) => {
@@ -133,7 +134,7 @@ const DatasetManager = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const { sessionReady, user } = useProfile();
+  const { sessionReady, user, hasPermission } = useProfile();
   const [project, setProject] = useState<any>(null);
   const [companyName, setCompanyName] = useState<string>("");
   const [version, setVersion] = useState<string>("");
@@ -1230,7 +1231,7 @@ const DatasetManager = () => {
                     toast({
                       title: "Upload completed",
                       description: "Please go to Simulation and annotate the images before training.",
-                      variant: "info",
+                      variant: "default",
                     });
                   }
                 }
@@ -2036,11 +2037,12 @@ const DatasetManager = () => {
         </div>
       </motion.div>
 
-      <motion.div
-        className="grid md:grid-cols-2 gap-6 mb-8"
-        variants={fadeInUpVariants}
-      >
-        <Card>
+      <ProtectedComponent requiredPermission="uploadDatasets">
+        <motion.div
+          className="grid md:grid-cols-2 gap-6 mb-8"
+          variants={fadeInUpVariants}
+        >
+          <Card>
           <CardHeader className="cursor-pointer" onClick={() => { setLabelledOpen((p) => !p); setUnlabelledOpen(false); }}>
             <CardTitle className="flex justify-between items-center">
               <span>Labelled data</span>
@@ -2133,12 +2135,14 @@ const DatasetManager = () => {
             </CardContent>
           )}
         </Card>
-      </motion.div>
+        </motion.div>
+      </ProtectedComponent>
 
-      <motion.div
-        className="flex items-center justify-between mb-6"
-        variants={fadeInUpVariants}
-      >
+      <ProtectedComponent requiredPermission="uploadDatasets">
+        <motion.div
+          className="flex items-center justify-between mb-6"
+          variants={fadeInUpVariants}
+        >
         <div className="flex items-center gap-4">
           <div className="flex items-end gap-2">
             <div className="w-48">
@@ -2181,7 +2185,8 @@ const DatasetManager = () => {
             )}
           </div>
         </div>
-      </motion.div>
+        </motion.div>
+      </ProtectedComponent>
 
       {/* Progress bar: reflects upload / processing progress from backend only (no fake percentages) */}
       <motion.div
@@ -2256,18 +2261,20 @@ const DatasetManager = () => {
                             >
                               View
                             </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-destructive/40 text-destructive hover:bg-destructive/5"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteVersionClick(v.datasetId);
-                              }}
-                              disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
-                            >
-                              Delete
-                            </Button>
+                            <ProtectedComponent requiredPermission="deleteDatasets">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-destructive/40 text-destructive hover:bg-destructive/5"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteVersionClick(v.datasetId);
+                                }}
+                                disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
+                              >
+                                Delete
+                              </Button>
+                            </ProtectedComponent>
                           </div>
                         </div>
                       ))}
@@ -2277,16 +2284,18 @@ const DatasetManager = () => {
           </Card>
           
           {/* Delete Project Button - Direct button below Versions Card */}
-          <div className="mt-4">
-            <Button
-              variant="destructive"
-              onClick={() => setShowDeleteProjectDialog(true)}
-              disabled={deletingProject}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete Project
-            </Button>
-          </div>
+          <ProtectedComponent requiredPermission="deleteProjects">
+            <div className="mt-4">
+              <Button
+                variant="destructive"
+                onClick={() => setShowDeleteProjectDialog(true)}
+                disabled={deletingProject}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Project
+              </Button>
+            </div>
+          </ProtectedComponent>
         </div>
 
         {/* Dataset Summary */}
@@ -2324,14 +2333,15 @@ const DatasetManager = () => {
       {/* File Browser - Modern File Manager View */}
       <AnimatePresence mode="wait">
       {selectedVersionDatasetId && metadata && (
-        <motion.div
-          key="file-browser"
-          variants={fadeInUpVariants}
-          initial="hidden"
-          animate="visible"
-          exit="hidden"
-        >
-        <Card className="mt-6">
+        <ProtectedComponent requiredPermission="viewRawDatasetImages">
+          <motion.div
+            key="file-browser"
+            variants={fadeInUpVariants}
+            initial="hidden"
+            animate="visible"
+            exit="hidden"
+          >
+          <Card className="mt-6">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
@@ -2486,6 +2496,7 @@ const DatasetManager = () => {
           </CardContent>
         </Card>
         </motion.div>
+        </ProtectedComponent>
       )}
       </AnimatePresence>
 
