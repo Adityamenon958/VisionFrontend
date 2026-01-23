@@ -94,6 +94,9 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     navigate("/project/prediction");
   };
 
+  // Check if user is a viewer role
+  const isViewer = profile?.role === 'viewer';
+
   return (
     <motion.div
       className="space-y-8 transition-colors duration-300 ease-in-out"
@@ -145,51 +148,53 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
       {/* Quick Actions and Activity Feed Row */}
       <motion.div
-        className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8"
+        className={`grid grid-cols-1 ${isViewer ? 'lg:grid-cols-1' : 'lg:grid-cols-3'} gap-6 lg:gap-8`}
         variants={fadeInUpVariants}
       >
-        {/* Quick Actions - takes 2 columns on large screens */}
-        <section className="lg:col-span-2" aria-label="Quick actions">
-          <h2 className="text-lg font-semibold mb-5 text-foreground">Quick Actions</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <ProtectedComponent requiredPermission="manageProjects">
-              <QuickActionCard
-                title="Create New Project"
-                description="Set up a new computer vision project."
-                icon={FolderKanban}
-                onClick={handleCreateProject}
-                isPrimary={true}
-              />
-            </ProtectedComponent>
-            <ProtectedComponent requiredPermission="uploadDatasets">
-              <QuickActionCard
-                title="Upload Dataset"
-                description="Add images and annotations for training."
-                icon={Upload}
-                onClick={handleUploadDataset}
-                disabled={projects.length === 0}
-              />
-            </ProtectedComponent>
-            <ProtectedComponent requiredPermission="startTraining">
-              <QuickActionCard
-                title="Start Training"
-                description="Begin training a new AI model."
-                icon={Settings}
-                onClick={handleStartTraining}
-              />
-            </ProtectedComponent>
-            <ProtectedComponent requiredPermission="runInference">
-              <QuickActionCard
-                title="Run Prediction"
-                description="Analyze new data with your models."
-                icon={Camera}
-                onClick={handleRunPrediction}
-              />
-            </ProtectedComponent>
-          </div>
-        </section>
+        {/* Quick Actions - hidden for viewer role */}
+        {!isViewer && (
+          <section className="lg:col-span-2" aria-label="Quick actions">
+            <h2 className="text-lg font-semibold mb-5 text-foreground">Quick Actions</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <ProtectedComponent requiredPermission="manageProjects">
+                <QuickActionCard
+                  title="Create New Project"
+                  description="Set up a new computer vision project."
+                  icon={FolderKanban}
+                  onClick={handleCreateProject}
+                  isPrimary={true}
+                />
+              </ProtectedComponent>
+              <ProtectedComponent requiredPermission="uploadDatasets">
+                <QuickActionCard
+                  title="Upload Dataset"
+                  description="Add images and annotations for training."
+                  icon={Upload}
+                  onClick={handleUploadDataset}
+                  disabled={projects.length === 0}
+                />
+              </ProtectedComponent>
+              <ProtectedComponent requiredPermission="startTraining">
+                <QuickActionCard
+                  title="Start Training"
+                  description="Begin training a new AI model."
+                  icon={Settings}
+                  onClick={handleStartTraining}
+                />
+              </ProtectedComponent>
+              <ProtectedComponent requiredPermission="runInference">
+                <QuickActionCard
+                  title="Run Prediction"
+                  description="Analyze new data with your models."
+                  icon={Camera}
+                  onClick={handleRunPrediction}
+                />
+              </ProtectedComponent>
+            </div>
+          </section>
+        )}
 
-        {/* Activity Feed - takes 1 column on large screens */}
+        {/* Activity Feed - takes 1 column on large screens when Quick Actions visible, full width for viewers */}
         <aside className="lg:col-span-1">
           <ActivityFeed 
             projects={projects}

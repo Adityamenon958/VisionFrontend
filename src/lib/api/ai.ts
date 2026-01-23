@@ -3,7 +3,7 @@ import { apiRequest } from "@/lib/api/config";
 export type AISource = "training_details" | "training_config";
 
 export interface AskAIRequest {
-  provider: "ollama" | "gemini";
+  provider: "gemini";
   source: AISource;
   question: string;
   context: Record<string, unknown>;
@@ -11,7 +11,7 @@ export interface AskAIRequest {
 
 export interface AskAIResponse {
   answer: string;
-  provider: "ollama" | "gemini";
+  provider: "gemini";
 }
 
 /**

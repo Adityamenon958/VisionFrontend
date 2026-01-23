@@ -1344,11 +1344,6 @@ const DatasetManager = () => {
       formData.append("project", projectName);
       formData.append("version", trimmedVersion);
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
       // Build fileMeta array: map each file's originalName to its folder
       const fileMeta = files.map((file) => {
         // @ts-ignore webkitRelativePath available in supported browsers
@@ -1376,10 +1371,15 @@ const DatasetManager = () => {
       });
 
       const uploadUrl = apiUrl("/dataset/upload");
-      // console.log("upload ->", uploadUrl);
+      // Get all authentication headers including custom X-User-* headers
+      const headers = await getAuthHeaders();
+      // For FormData, remove Content-Type to let browser set it with boundary
+      const uploadHeaders: HeadersInit = { ...headers };
+      delete (uploadHeaders as any)["Content-Type"];
+      
       const res = await fetch(uploadUrl, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: uploadHeaders,
         body: formData,
       });
 

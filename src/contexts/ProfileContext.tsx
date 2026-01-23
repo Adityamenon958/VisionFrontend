@@ -75,6 +75,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           .eq("id", userId)
           .maybeSingle();
 
+        // Single timeout promise that rejects after 8 seconds
         const profileTimeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(
             () => reject(new Error("Profile fetch timeout after 8 seconds")),
@@ -82,20 +83,11 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           );
         });
 
-          // Add safety timeout wrapper
-          const profileSafetyTimeout = new Promise<{ data: any; error: any }>((resolve) => {
-            setTimeout(() => {
-              resolve({ data: null, error: new Error("Profile fetch safety timeout after 10 seconds") });
-            }, 10000);
-          });
-
-          const profileResult: any = await Promise.race([
-            Promise.race([
-              profileFetchPromise.then((r: any) => ({ data: r.data, error: r.error })),
-              profileTimeoutPromise,
-            ]),
-            profileSafetyTimeout,
-          ]);
+        // Race between the fetch and timeout
+        const profileResult: any = await Promise.race([
+          profileFetchPromise.then((r: any) => ({ data: r.data, error: r.error })),
+          profileTimeoutPromise,
+        ]);
 
           const profileData = profileResult.data;
           const profileError = profileResult.error;
@@ -405,7 +397,12 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
       
         try {
           sessionStorage.removeItem("VISIONM_EXPLICIT_SIGNOUT");
-        } catch {}
+        } catch (err) {
+          // Ignore sessionStorage errors (e.g., in private browsing mode)
+          if (isDev) {
+            console.warn("[ProfileContext] Failed to remove sessionStorage item:", err);
+          }
+        }
       
         hasInitializedProfileRef.current = true;
         setUser(session.user);

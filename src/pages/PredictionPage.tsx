@@ -282,6 +282,41 @@ const VideoPlayer = ({
 
 const PredictionPage = () => {
   const { profile, company, sessionReady, hasPermission } = useProfile();
+  
+  // Helper function to safely build authenticated request headers
+  const buildAuthHeaders = useCallback((headers: HeadersInit, includeContentType: boolean = false): HeadersInit => {
+    const authHeader = headers["Authorization"];
+    if (!authHeader || typeof authHeader !== "string") {
+      throw new Error("Missing authorization token. Please log in again.");
+    }
+    
+    const requestHeaders: HeadersInit = {
+      "Authorization": authHeader,
+    };
+    
+    if (includeContentType) {
+      requestHeaders["Content-Type"] = "application/json";
+    }
+    
+    // Add custom auth headers safely
+    if (headers["X-User-Id"] && typeof headers["X-User-Id"] === "string") {
+      requestHeaders["X-User-Id"] = headers["X-User-Id"];
+    }
+    if (headers["X-User-Role"] && typeof headers["X-User-Role"] === "string") {
+      requestHeaders["X-User-Role"] = headers["X-User-Role"];
+    }
+    if (headers["X-User-Email"] && typeof headers["X-User-Email"] === "string") {
+      requestHeaders["X-User-Email"] = headers["X-User-Email"];
+    }
+    if (headers["X-User-Company"] && typeof headers["X-User-Company"] === "string") {
+      requestHeaders["X-User-Company"] = headers["X-User-Company"];
+    }
+    if (headers["X-User-Company-Id"] && typeof headers["X-User-Company-Id"] === "string") {
+      requestHeaders["X-User-Company-Id"] = headers["X-User-Company-Id"];
+    }
+    
+    return requestHeaders;
+  }, []);
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const { setItems: setBreadcrumbs } = useBreadcrumbs();
@@ -1043,12 +1078,12 @@ const PredictionPage = () => {
         timestamp: new Date().toISOString()
       });
 
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, true);
+
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           image: frameBase64,
           confidenceThreshold: confidenceThreshold,
@@ -1390,12 +1425,12 @@ const PredictionPage = () => {
       const headers = await getAuthHeaders();
       const url = apiUrl('/inference/live/start');
       
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, true);
+      
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           modelId: selectedModelId,
           confidenceThreshold: confidenceThreshold,
@@ -1501,7 +1536,10 @@ const PredictionPage = () => {
     try {
       const headers = await getAuthHeaders();
       const url = apiUrl(`/inference/${encodeURIComponent(id)}/status`);
-      const res = await fetch(url, { headers });
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, false);
+      
+      const res = await fetch(url, { headers: requestHeaders });
 
       if (!res.ok) {
         if (res.status === 404) {
@@ -1880,7 +1918,16 @@ const PredictionPage = () => {
 
       return () => {
         isMounted = false;
-        // Don't revoke here - let the cache manage it
+        // Cleanup: If component unmounts before image loads and URL was created but not cached,
+        // revoke it to prevent memory leak
+        if (currentObjectUrl && !imageObjectUrlCache.current.has(src)) {
+          try {
+            URL.revokeObjectURL(currentObjectUrl);
+          } catch (err) {
+            // Ignore errors when revoking (e.g., already revoked)
+            console.warn("Error revoking object URL:", err);
+          }
+        }
       };
     }, [src, fetchImageAsObjectUrl]);
 
@@ -2099,18 +2146,18 @@ const PredictionPage = () => {
 
       if (inferenceMode === "dataset") {
         // Existing JSON-based dataset inference
+        // Ensure all auth headers are explicitly included with validation
+        const requestHeaders = buildAuthHeaders(headers, true);
+        
         res = await fetch(url, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          modelId: selectedModelId,
-          datasetId: selectedDatasetId,
-          confidenceThreshold: confidenceThreshold,
-        }),
-      });
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify({
+            modelId: selectedModelId,
+            datasetId: selectedDatasetId,
+            confidenceThreshold: confidenceThreshold,
+          }),
+        });
       } else {
         // New custom upload inference using multipart/form-data
         const formData = new FormData();
@@ -2120,12 +2167,12 @@ const PredictionPage = () => {
           formData.append("files", file);
         });
 
+        // For FormData, ensure auth headers are included but don't set Content-Type
+        const requestHeaders = buildAuthHeaders(headers, false);
+
         res = await fetch(url, {
           method: "POST",
-          headers: {
-            ...headers,
-            // Do not set Content-Type here; the browser will set it with the correct boundary
-          },
+          headers: requestHeaders,
           body: formData,
         });
       }
@@ -2233,15 +2280,19 @@ const PredictionPage = () => {
       if (currentInferenceId && isRunning) {
         getAuthHeaders().then(headers => {
           const url = apiUrl(`/inference/live/${encodeURIComponent(currentInferenceId)}/stop`);
-          fetch(url, {
-            method: 'POST',
-            headers: {
-              ...headers,
-              'Content-Type': 'application/json',
-            },
-          }).catch(() => {
-            // Ignore errors during cleanup
-          });
+          // Ensure all auth headers are explicitly included with validation
+          try {
+            const requestHeaders = buildAuthHeaders(headers, true);
+            fetch(url, {
+              method: 'POST',
+              headers: requestHeaders,
+            }).catch(() => {
+              // Ignore errors during cleanup
+            });
+          } catch (err) {
+            // Ignore auth errors during cleanup
+            console.warn("Failed to build auth headers during cleanup:", err);
+          }
         }).catch(() => {
           // Ignore errors during cleanup
         });

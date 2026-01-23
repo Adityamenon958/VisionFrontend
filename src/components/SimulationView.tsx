@@ -82,8 +82,11 @@ const FALLBACK_YOLO_MODELS = [
 
 export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profile }) => {
   const { toast } = useToast();
-  const { sessionReady } = useProfile();
+  const { sessionReady, profile: userProfile } = useProfile();
   const navigate = useNavigate();
+  
+  // Get user role for permission checks
+  const userRole = userProfile?.role || profile?.role;
 
   // selections
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -1543,25 +1546,28 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                   : "Created time unknown"}
                               </div>
                             </button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-destructive hover:text-destructive"
-                              onClick={() => {
-                                setModelToDelete(model);
-                                setShowDeleteModelDialog(true);
-                              }}
-                              disabled={deletingModelId === model.modelId}
-                            >
-                              {deletingModelId === model.modelId ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Deleting...
-                                </>
-                              ) : (
-                                "Delete"
-                              )}
-                            </Button>
+                            {/* Delete button - hidden for viewer and operator roles */}
+                            {userRole !== 'viewer' && userRole !== 'operator' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  setModelToDelete(model);
+                                  setShowDeleteModelDialog(true);
+                                }}
+                                disabled={deletingModelId === model.modelId}
+                              >
+                                {deletingModelId === model.modelId ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Deleting...
+                                  </>
+                                ) : (
+                                  "Delete"
+                                )}
+                              </Button>
+                            )}
                           </div>
 
                           {isExpanded && (
@@ -1762,8 +1768,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                 <ModelMetricsChatbot model={model} />
                               )}
 
-                              {/* Download Model and Deploy Model Buttons */}
-                              {model.modelId && (
+                              {/* Download Model and Deploy Model Buttons - hidden for viewer role */}
+                              {model.modelId && userRole !== 'viewer' && (
                                 <div className="pt-3 border-t space-y-3">
                                   <div className="text-xs font-semibold mb-2">Model Actions</div>
                                   <div className="flex flex-wrap gap-2">
@@ -2259,7 +2265,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                             <div className="font-medium">{modelInfo.modelVersion}</div>
                           </div>
                         )}
-                        {modelInfo.modelId && (
+                        {/* Download button - hidden for viewer role */}
+                        {modelInfo.modelId && userRole !== 'viewer' && (
                           <div>
                             <div className="text-muted-foreground mb-2">Download</div>
                             <ModelDownloadButton

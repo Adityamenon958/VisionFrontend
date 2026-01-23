@@ -1,10 +1,8 @@
 import { useMemo } from "react";
-import type { ChatMessage } from "@/lib/services/ollamaService";
-import { useOllamaChat } from "@/hooks/useOllamaChat";
 import { useGeminiChat } from "@/hooks/useGeminiChat";
 import type { AISource } from "@/lib/api/ai";
 
-export type AIProvider = "ollama" | "gemini";
+export type AIProvider = "gemini";
 
 interface UseAIChatOptions {
   provider: AIProvider;
@@ -15,11 +13,6 @@ interface UseAIChatOptions {
 }
 
 export const useAIChat = (options: UseAIChatOptions) => {
-  const ollamaChat = useOllamaChat({
-    systemPrompt: options.systemPrompt,
-    onError: options.onError,
-  });
-
   const geminiChat = useGeminiChat({
     provider: options.provider,
     source: options.source,
@@ -27,20 +20,8 @@ export const useAIChat = (options: UseAIChatOptions) => {
     onError: options.onError,
   });
 
-  const active = useMemo(() => {
-    if (options.provider === "ollama") {
-      return {
-        provider: "ollama" as AIProvider,
-        messages: ollamaChat.messages as ChatMessage[],
-        isLoading: ollamaChat.isLoading,
-        isAvailable: ollamaChat.isConnected ?? null,
-        sendMessage: ollamaChat.sendMessageStream,
-        clearMessages: ollamaChat.clearMessages,
-        stop: ollamaChat.stop,
-      };
-    }
-
-    return {
+  const active = useMemo(
+    () => ({
       provider: "gemini" as AIProvider,
       messages: geminiChat.messages,
       isLoading: geminiChat.isLoading,
@@ -49,12 +30,12 @@ export const useAIChat = (options: UseAIChatOptions) => {
       clearMessages: geminiChat.clearMessages,
       stop: geminiChat.stop,
       lastProvider: geminiChat.lastProvider,
-    };
-  }, [options.provider, ollamaChat, geminiChat]);
+    }),
+    [geminiChat]
+  );
 
   return {
     ...active,
-    isOllamaAvailable: ollamaChat.isConnected,
     isGeminiAvailable: geminiChat.isAvailable,
   };
 };

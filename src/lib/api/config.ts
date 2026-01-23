@@ -241,9 +241,32 @@ export const apiRequest = async <T>(
   console.log(`[apiRequest] ${options.method || "GET"} ${url}`);
 
   // Don't override Content-Type for FormData
+  // Merge headers: auth headers first, then user-provided headers (user headers can override)
   const requestHeaders: HeadersInit = { ...headers };
   if (!(options.body instanceof FormData)) {
-    Object.assign(requestHeaders, options.headers);
+    // Merge user-provided headers, but ensure auth headers are preserved
+    if (options.headers) {
+      Object.assign(requestHeaders, options.headers);
+      // Re-apply critical auth headers to ensure they're not overridden
+      if (headers["Authorization"]) {
+        requestHeaders["Authorization"] = headers["Authorization"];
+      }
+      if (headers["X-User-Id"]) {
+        requestHeaders["X-User-Id"] = headers["X-User-Id"];
+      }
+      if (headers["X-User-Role"]) {
+        requestHeaders["X-User-Role"] = headers["X-User-Role"];
+      }
+      if (headers["X-User-Email"]) {
+        requestHeaders["X-User-Email"] = headers["X-User-Email"];
+      }
+      if (headers["X-User-Company"]) {
+        requestHeaders["X-User-Company"] = headers["X-User-Company"];
+      }
+      if (headers["X-User-Company-Id"]) {
+        requestHeaders["X-User-Company-Id"] = headers["X-User-Company-Id"];
+      }
+    }
   } else {
     // For FormData, only add auth header, let browser set Content-Type
     delete requestHeaders["Content-Type"];
@@ -309,6 +332,45 @@ export const apiRequest = async <T>(
   }
 
   const json = await response.json();
+  
+  // Check for error in response body even if status is 200
+  // Only throw if there's an error AND no success indicators (e.g., converted, labelFilesCreated, saved, etc.)
+  if (json && typeof json === 'object' && 'error' in json) {
+    // Check if response has success indicators (common fields that indicate successful processing)
+    // Check for positive numeric values (not 0) or truthy boolean values
+    const hasSuccessIndicators = 
+      (typeof json.converted === 'number' && json.converted > 0) ||
+      (typeof json.labelFilesCreated === 'number' && json.labelFilesCreated > 0) ||
+      (typeof json.saved === 'number' && json.saved > 0) ||
+      (typeof json.updated === 'number' && json.updated > 0) ||
+      (typeof json.created === 'number' && json.created > 0) ||
+      (typeof json.deleted === 'number' && json.deleted > 0) ||
+      json.saved === true ||
+      json.updated === true ||
+      json.created === true ||
+      json.deleted === true ||
+      (json.message && typeof json.message === 'string' && 
+       !json.message.toLowerCase().includes('error') && 
+       !json.message.toLowerCase().includes('fail') &&
+       (json.message.toLowerCase().includes('success') || 
+        json.message.toLowerCase().includes('completed') ||
+        json.message.toLowerCase().includes('created') ||
+        json.message.toLowerCase().includes('updated')));
+    
+    // If there's an error but also success indicators, log a warning but don't throw
+    // This handles cases where backend processes successfully but still logs a warning
+    if (hasSuccessIndicators) {
+      console.warn(`[apiRequest] Warning in response body for ${url}:`, json.message || json.error);
+      // Return the response anyway since it appears to have succeeded
+      return json;
+    }
+    
+    // If there's an error with no success indicators, throw
+    const errorMessage = json.message || json.error || 'Unknown error';
+    console.error(`[apiRequest] Error in response body for ${url}:`, errorMessage);
+    throw new Error(errorMessage);
+  }
+  
   return json;
 };
 
