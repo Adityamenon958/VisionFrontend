@@ -70,12 +70,18 @@ const API_BASE: string =
 console.info("[SimulationView] API_BASE =", API_BASE);
 
 // fallback static YOLO list (used only if base-models fetch fails)
-const FALLBACK_YOLO_MODELS = [
-  { size: "n", label: "YOLOv8 Nano (n)" },
-  { size: "s", label: "YOLOv8 Small (s)" },
-  { size: "m", label: "YOLOv8 Medium (m)" },
-  { size: "l", label: "YOLOv8 Large (l)" },
-  { size: "x", label: "YOLOv8 XLarge (x)" },
+const FALLBACK_YOLO_MODELS: Array<{
+  type: "base";
+  version: string;
+  size: string;
+  key: string;
+  name: string;
+}> = [
+  { type: "base", version: "v8", size: "n", key: "base-v8n", name: "YOLOv8 Nano" },
+  { type: "base", version: "v8", size: "s", key: "base-v8s", name: "YOLOv8 Small" },
+  { type: "base", version: "v8", size: "m", key: "base-v8m", name: "YOLOv8 Medium" },
+  { type: "base", version: "v8", size: "l", key: "base-v8l", name: "YOLOv8 Large" },
+  { type: "base", version: "v8", size: "x", key: "base-v8x", name: "YOLOv8 XLarge" },
 ];
 
 export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profile }) => {
@@ -100,6 +106,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       name?: string;
       sizeMB?: number;
       label?: string;
+      version?: string;
       modelId?: string;
       modelVersion?: string;
       modelType?: string;
@@ -456,10 +463,13 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const baseModelsRaw: any[] = Array.isArray(json.baseModels) ? json.baseModels : [];
       const trainedModelsRaw: any[] = Array.isArray(json.trainedModels) ? json.trainedModels : [];
 
+      // ✅ Use backend key/version to keep dropdown values unique across YOLO versions
       const mappedBase = baseModelsRaw.map((m: any, idx: number) => {
         const size = m.size ?? m.sizeMB ?? m.filename ?? "";
-        const key = `base-${size || idx}`;
-        const name = m.name ?? m.filename ?? `model-${size}`;
+        const version = m.version ? String(m.version) : "";
+        const derivedKey = version && size ? `base-${version}${size}` : `base-${size || idx}`;
+        const key = m.key ?? derivedKey;
+        const name = m.name ?? m.filename ?? `model-${version}${size}`;
         return {
           type: "base" as const,
           key,
@@ -468,6 +478,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           sizeMB: m.sizeMB,
           filename: m.filename,
           label: name,
+          version: version || undefined,
         };
       });
 
@@ -491,10 +502,11 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
         // Fallback to static YOLO base models, mapped into the same shape
         const fallback = FALLBACK_YOLO_MODELS.map((m, idx) => ({
           type: "base" as const,
-          key: `fallback-${m.size}-${idx}`,
+          key: m.key ?? `fallback-${m.size}-${idx}`,
           size: m.size,
-          name: m.label,
-          label: m.label,
+          name: m.name,
+          label: m.name,
+          version: m.version,
         }));
         setBaseModels(fallback);
       } else {
@@ -504,10 +516,11 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       console.error("fetchBaseModels error:", err);
       const fallback = FALLBACK_YOLO_MODELS.map((m, idx) => ({
         type: "base" as const,
-        key: `fallback-${m.size}-${idx}`,
+        key: m.key ?? `fallback-${m.size}-${idx}`,
         size: m.size,
-        name: m.label,
-        label: m.label,
+        name: m.name,
+        label: m.name,
+        version: m.version,
       }));
       setBaseModels(fallback);
     }
@@ -858,9 +871,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     }
 
     // Prepare payload based on selected model option
-    const selectedModel =
-      baseModels.find((m) => m.key === selectedModelSize) ||
-      baseModels.find((m) => (m.size || m.filename) === selectedModelSize);
+    const selectedModel = baseModels.find((m) => m.key === selectedModelSize);
 
     const payload: any = {
       datasetId: selectedDatasetId,
@@ -871,10 +882,16 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       // Continue/improve an existing trained model
       payload.modelId = selectedModel.modelId;
     } else {
-      // Start from a base model (or fallback to current modelType/size)
+      // ✅ Use modelKey to disambiguate versions like v5/v8/v26
       payload.modelType = (selectedModel?.modelType as string) || modelType;
-      if ((selectedModel?.size || selectedModelSize) && modelType === "YOLO") {
-        payload.modelSize = String(selectedModel?.size || selectedModelSize);
+      if (selectedModel?.key) {
+        payload.modelKey = selectedModel.key;
+      } else if (selectedModelSize) {
+        payload.modelKey = selectedModelSize;
+      }
+      // Only send modelSize if we do NOT have a modelKey (avoid backend picking the wrong version)
+      if (!payload.modelKey && selectedModel?.size && modelType === "YOLO") {
+        payload.modelSize = String(selectedModel.size);
       }
     }
 
@@ -1833,8 +1850,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                         </SelectItem>
                       ) : (
                         baseModels.map((m, i) => {
-                          const val = m.key ?? m.size ?? (m.filename ? String(m.filename) : `m-${i}`);
-                          const label = m.label ?? m.name ?? String(m.filename ?? val);
+                          const val = m.key ?? `model-${i}`;
+                          const label = m.name ?? m.label ?? String(m.filename ?? val);
                           return (
                             <SelectItem key={String(val) + "-" + i} value={String(val)}>
                               {m.type === "trained" ? `Trained: ${label}` : label}
