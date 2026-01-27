@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/pages/PageHeader";
 import {
@@ -27,6 +27,7 @@ import { Loader2, ArrowLeft, ZoomIn, ZoomOut, ChevronLeft, ChevronRight } from "
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+import { getAuthHeaders, apiUrl } from "@/lib/api/config";
 
 interface HistoryInferenceResults {
   totalDetections: number;
@@ -156,6 +157,118 @@ const PredictionHistoryDetailsPage = () => {
   const [imageViewerIndex, setImageViewerIndex] = useState(0);
   const [imageZoom, setImageZoom] = useState(1);
 
+  // Cache for authenticated image object URLs
+  const imageObjectUrlCache = useRef<Map<string, string>>(new Map());
+
+  // Helper function to fetch image as blob with authentication
+  const fetchImageAsObjectUrl = useCallback(async (imageUrl: string): Promise<string | null> => {
+    // Check cache first
+    if (imageObjectUrlCache.current.has(imageUrl)) {
+      return imageObjectUrlCache.current.get(imageUrl) || null;
+    }
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(imageUrl, { headers });
+
+      if (!res.ok) {
+        console.warn(`Failed to fetch image: ${imageUrl}`, res.status);
+        return null;
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      imageObjectUrlCache.current.set(imageUrl, objectUrl);
+      return objectUrl;
+    } catch (error) {
+      console.error("Error fetching image:", error);
+      return null;
+    }
+  }, []);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      imageObjectUrlCache.current.forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+      imageObjectUrlCache.current.clear();
+    };
+  }, []);
+
+  // Authenticated Image Component
+  const AuthenticatedImage: React.FC<{
+    src: string;
+    alt: string;
+    className?: string;
+    onClick?: () => void;
+    style?: React.CSSProperties;
+  }> = ({ src, alt, className, onClick, style }) => {
+    const [objectUrl, setObjectUrl] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+      let isMounted = true;
+      let currentObjectUrl: string | null = null;
+
+      const loadImage = async () => {
+        try {
+          setLoading(true);
+          setError(false);
+          const url = await fetchImageAsObjectUrl(src);
+          if (isMounted) {
+            currentObjectUrl = url;
+            setObjectUrl(url);
+            setLoading(false);
+            if (!url) {
+              setError(true);
+            }
+          }
+        } catch (err) {
+          if (isMounted) {
+            setError(true);
+            setLoading(false);
+          }
+        }
+      };
+
+      loadImage();
+
+      return () => {
+        isMounted = false;
+        // Don't revoke here - let the cache manage it
+      };
+    }, [src, fetchImageAsObjectUrl]);
+
+    if (error) {
+      return (
+        <div className={`${className} bg-muted flex items-center justify-center`} style={style}>
+          <span className="text-xs text-muted-foreground">Failed to load</span>
+        </div>
+      );
+    }
+
+    if (loading || !objectUrl) {
+      return (
+        <div className={`${className} bg-muted flex items-center justify-center`} style={style}>
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src={objectUrl}
+        alt={alt}
+        className={className}
+        onClick={onClick}
+        style={style}
+        loading="lazy"
+      />
+    );
+  };
+
   // Helper function to normalize annotated images from either structure
   const normalizeAnnotatedImages = (
     images: 
@@ -234,18 +347,11 @@ const PredictionHistoryDetailsPage = () => {
 
     setLoading(true);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const base = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
-      const url =
-        (base ? `${base}` : "") +
-        `/inference/${encodeURIComponent(inferenceId)}/results?filter=${filter}`;
+      const headers = await getAuthHeaders();
+      const url = apiUrl(`/inference/${encodeURIComponent(inferenceId)}/results?filter=${filter}`);
 
       const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers,
       });
 
       if (!res.ok) {
@@ -509,11 +615,10 @@ const PredictionHistoryDetailsPage = () => {
                               onClick={() => openImageViewerAt(idx, imagesArray)}
                             >
                               <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                <img
+                                <AuthenticatedImage
                                   src={img.url}
                                   alt={img.filename}
                                   className="w-full h-full object-contain"
-                                  loading="lazy"
                                 />
                                 {img.tag && img.tag !== 'unreviewed' && (
                                   <Badge
@@ -549,11 +654,10 @@ const PredictionHistoryDetailsPage = () => {
                               }
                             >
                               <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                <img
+                                <AuthenticatedImage
                                   src={img.url}
                                   alt={img.filename}
                                   className="w-full h-full object-contain"
-                                  loading="lazy"
                                 />
                                 <Badge
                                   variant="outline"
@@ -583,11 +687,10 @@ const PredictionHistoryDetailsPage = () => {
                               }
                             >
                               <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                <img
+                                <AuthenticatedImage
                                   src={img.url}
                                   alt={img.filename}
                                   className="w-full h-full object-contain"
-                                  loading="lazy"
                                 />
                                 <Badge
                                   variant="outline"
@@ -612,11 +715,10 @@ const PredictionHistoryDetailsPage = () => {
                           className="space-y-2"
                         >
                           <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                            <img
+                            <AuthenticatedImage
                               src={img.url}
                               alt={img.filename}
                               className="w-full h-full object-contain"
-                              loading="lazy"
                             />
                           </div>
                           <div className="text-xs text-muted-foreground truncate">
@@ -654,7 +756,7 @@ const PredictionHistoryDetailsPage = () => {
 
               <div className="flex-1 overflow-auto flex items-center justify-center bg-muted rounded-md">
                 {imageViewerImages[imageViewerIndex] && (
-                  <img
+                  <AuthenticatedImage
                     src={imageViewerImages[imageViewerIndex].url}
                     alt={imageViewerImages[imageViewerIndex].filename}
                     className="max-h-[80vh] object-contain transition-transform"

@@ -28,6 +28,8 @@ import { Badge } from "@/components/ui/badge";
 import { useProfile } from "@/hooks/useProfile";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
+import { getAuthHeaders } from "@/lib/api/config";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 import { ModelDownloadButton } from "@/components/training/ModelDownloadButton";
 import { ModelDeployButton } from "@/components/training/ModelDeployButton";
 import { ModelMetricsChatbot } from "@/components/models/ModelMetricsChatbot";
@@ -80,8 +82,11 @@ const FALLBACK_YOLO_MODELS = [
 
 export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profile }) => {
   const { toast } = useToast();
-  const { sessionReady } = useProfile();
+  const { sessionReady, profile: userProfile } = useProfile();
   const navigate = useNavigate();
+  
+  // Get user role for permission checks
+  const userRole = userProfile?.role || profile?.role;
 
   // selections
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -192,13 +197,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   };
 
   // helper headers
-  const getFetchHeaders = () => {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (profile?.access_token) {
-      headers["Authorization"] = `Bearer ${profile.access_token}`;
-    }
-    return headers;
-  };
+  // Removed local getFetchHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Delete a trained model by modelId using DELETE /api/models/:modelId
   const handleDeleteModel = async () => {
@@ -208,9 +207,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     setDeletingModelId(modelId);
     try {
       const url = `${API_BASE}/models/${encodeURIComponent(modelId)}`;
+      const headers = await getAuthHeaders();
       const resp = await fetch(url, {
         method: "DELETE",
-        headers: getFetchHeaders(),
+        headers,
       });
 
       if (!resp.ok) {
@@ -277,7 +277,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/datasets?${qs.toString()}`;
       console.info("[fetchDatasets] url:", url, { selectedProjectObj });
 
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         const body = await resp.text().catch(() => "<unreadable>");
@@ -371,7 +372,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/dataset/${encodeURIComponent(datasetId)}`;
       console.info("[fetchDatasetDetails] url:", url);
 
-      const resp = await fetch(url, { headers: getFetchHeaders(), signal: abort.signal });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers, signal: abort.signal });
 
       if (!resp.ok) {
         if (resp.status === 404) {
@@ -436,7 +438,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
           ? `${API_BASE}/train/base-models?${qs.toString()}`
           : `${API_BASE}/train/base-models`;
       console.info("[fetchBaseModels] url:", url);
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         console.warn("[fetchBaseModels] non-ok:", resp.status);
@@ -541,7 +544,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
       const url = `${API_BASE}/models?${qs.toString()}`;
       console.info("[fetchTrainedModels] url:", url);
 
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
       if (!resp.ok) {
         throw new Error(`Failed to load trained models (${resp.status})`);
       }
@@ -563,7 +567,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     try {
       const url = `${API_BASE}/train/defaults?modelType=${encodeURIComponent(mType)}`;
       console.info("[fetchDefaultParams] url:", url);
-      const resp = await fetch(url, { headers: getFetchHeaders() });
+      const headers = await getAuthHeaders();
+      const resp = await fetch(url, { headers });
 
       if (!resp.ok) {
         console.warn("[fetchDefaultParams] non-ok:", resp.status);
@@ -691,8 +696,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
       try {
         // Fetch current status from backend
+        const headers = await getAuthHeaders();
         const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(savedState.jobId)}/status`, {
-          headers: getFetchHeaders(),
+          headers,
         });
 
         if (!resp.ok) {
@@ -908,9 +914,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     setLogs([]);
 
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -967,8 +974,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
     const fetchStatusAndMaybeLogs = async () => {
       try {
+        const headers = await getAuthHeaders();
         const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobIdToPoll)}/status`, {
-          headers: getFetchHeaders(),
+          headers,
         });
         
         if (!resp.ok) {
@@ -1120,8 +1128,9 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
     const abort = new AbortController();
     logsAbortRef.current = abort;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobIdToPoll)}/logs?limit=${limit}`, {
-        headers: getFetchHeaders(),
+        headers,
         signal: abort.signal,
       });
       if (!resp.ok) throw new Error(`Failed to fetch logs (${resp.status})`);
@@ -1163,9 +1172,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const cancelJob = async () => {
     if (!jobId) return;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -1194,9 +1204,10 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
   const retryJob = async () => {
     if (!jobId) return;
     try {
+      const headers = await getAuthHeaders();
       const resp = await fetch(`${API_BASE}/train/${encodeURIComponent(jobId)}/retry`, {
         method: "POST",
-        headers: getFetchHeaders(),
+        headers,
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) throw new Error(json?.error ?? `Retry failed (${resp.status})`);
@@ -1367,27 +1378,28 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
 
         {/* Phase 2: Annotate Data button - show for unlabeled datasets */}
         {selectedDatasetId &&
-          datasetDetails?.unlabeledImages > 0 &&
-         (
-            <motion.div
-              key="annotation-toggle"
-              variants={fadeInUpVariants}
-              initial="hidden"
-              animate="visible"
-            >
-              <div className="flex justify-end">
-                <Button
-                  variant="outline"
-                  type="button"
-                  onClick={() => {
-                    // Phase 2: Navigate to annotation page for this dataset version
-                    navigate(`/annotation/${selectedDatasetId}`);
-                  }}
-                >
-                  Annotate Data
-                </Button>
-              </div>
-            </motion.div>
+          datasetDetails?.unlabeledImages > 0 && (
+            <ProtectedComponent requiredPermission="annotateDatasets">
+              <motion.div
+                key="annotation-toggle"
+                variants={fadeInUpVariants}
+                initial="hidden"
+                animate="visible"
+              >
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => {
+                      // Phase 2: Navigate to annotation page for this dataset version
+                      navigate(`/annotation/${selectedDatasetId}`);
+                    }}
+                  >
+                    Annotate Data
+                  </Button>
+                </div>
+              </motion.div>
+            </ProtectedComponent>
           )}
 
         {/* Training view content */}
@@ -1534,25 +1546,28 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                   : "Created time unknown"}
                               </div>
                             </button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-destructive hover:text-destructive"
-                              onClick={() => {
-                                setModelToDelete(model);
-                                setShowDeleteModelDialog(true);
-                              }}
-                              disabled={deletingModelId === model.modelId}
-                            >
-                              {deletingModelId === model.modelId ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  Deleting...
-                                </>
-                              ) : (
-                                "Delete"
-                              )}
-                            </Button>
+                            {/* Delete button - hidden for viewer and operator roles */}
+                            {userRole !== 'viewer' && userRole !== 'operator' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  setModelToDelete(model);
+                                  setShowDeleteModelDialog(true);
+                                }}
+                                disabled={deletingModelId === model.modelId}
+                              >
+                                {deletingModelId === model.modelId ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Deleting...
+                                  </>
+                                ) : (
+                                  "Delete"
+                                )}
+                              </Button>
+                            )}
                           </div>
 
                           {isExpanded && (
@@ -1753,8 +1768,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                 <ModelMetricsChatbot model={model} />
                               )}
 
-                              {/* Download Model and Deploy Model Buttons */}
-                              {model.modelId && (
+                              {/* Download Model and Deploy Model Buttons - hidden for viewer role */}
+                              {model.modelId && userRole !== 'viewer' && (
                                 <div className="pt-3 border-t space-y-3">
                                   <div className="text-xs font-semibold mb-2">Model Actions</div>
                                   <div className="flex flex-wrap gap-2">
@@ -2250,7 +2265,8 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                             <div className="font-medium">{modelInfo.modelVersion}</div>
                           </div>
                         )}
-                        {modelInfo.modelId && (
+                        {/* Download button - hidden for viewer role */}
+                        {modelInfo.modelId && userRole !== 'viewer' && (
                           <div>
                             <div className="text-muted-foreground mb-2">Download</div>
                             <ModelDownloadButton
@@ -2335,19 +2351,21 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
             modelType &&
             !isSimulating &&
             !jobId && (
-              <motion.div
-                key="start-training"
-                variants={fadeInUpVariants}
-                initial="hidden"
-                animate="visible"
-                exit="hidden"
-                className="flex justify-end"
-              >
-                <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
-                  <Play className="h-4 w-4" />
-                  Start Training
-                </Button>
-              </motion.div>
+              <ProtectedComponent requiredPermission="startTraining">
+                <motion.div
+                  key="start-training"
+                  variants={fadeInUpVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit="hidden"
+                  className="flex justify-end"
+                >
+                  <Button onClick={() => setShowSimulateConfirm(true)} size="lg" className="gap-2">
+                    <Play className="h-4 w-4" />
+                    Start Training
+                  </Button>
+                </motion.div>
+              </ProtectedComponent>
             )}
         </AnimatePresence>
           </>

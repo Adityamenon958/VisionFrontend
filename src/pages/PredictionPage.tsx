@@ -4,7 +4,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useProfile } from "@/hooks/useProfile";
 import { useBreadcrumbs } from "@/components/app-shell/breadcrumb-context";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 import { supabase } from "@/integrations/supabase/client";
+import { getAuthHeaders } from "@/lib/api/config";
 import { PageHeader } from "@/components/pages/PageHeader";
 import {
   Card,
@@ -279,7 +281,42 @@ const VideoPlayer = ({
 };
 
 const PredictionPage = () => {
-  const { profile, company, sessionReady } = useProfile();
+  const { profile, company, sessionReady, hasPermission } = useProfile();
+  
+  // Helper function to safely build authenticated request headers
+  const buildAuthHeaders = useCallback((headers: HeadersInit, includeContentType: boolean = false): HeadersInit => {
+    const authHeader = headers["Authorization"];
+    if (!authHeader || typeof authHeader !== "string") {
+      throw new Error("Missing authorization token. Please log in again.");
+    }
+    
+    const requestHeaders: HeadersInit = {
+      "Authorization": authHeader,
+    };
+    
+    if (includeContentType) {
+      requestHeaders["Content-Type"] = "application/json";
+    }
+    
+    // Add custom auth headers safely
+    if (headers["X-User-Id"] && typeof headers["X-User-Id"] === "string") {
+      requestHeaders["X-User-Id"] = headers["X-User-Id"];
+    }
+    if (headers["X-User-Role"] && typeof headers["X-User-Role"] === "string") {
+      requestHeaders["X-User-Role"] = headers["X-User-Role"];
+    }
+    if (headers["X-User-Email"] && typeof headers["X-User-Email"] === "string") {
+      requestHeaders["X-User-Email"] = headers["X-User-Email"];
+    }
+    if (headers["X-User-Company"] && typeof headers["X-User-Company"] === "string") {
+      requestHeaders["X-User-Company"] = headers["X-User-Company"];
+    }
+    if (headers["X-User-Company-Id"] && typeof headers["X-User-Company-Id"] === "string") {
+      requestHeaders["X-User-Company-Id"] = headers["X-User-Company-Id"];
+    }
+    
+    return requestHeaders;
+  }, []);
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const { setItems: setBreadcrumbs } = useBreadcrumbs();
@@ -321,6 +358,9 @@ const PredictionPage = () => {
   
   // Image filter state for tagged inference results
   const [imageFilter, setImageFilter] = useState<'all' | 'good' | 'defect'>('all');
+
+  // Cache for authenticated image object URLs
+  const imageObjectUrlCache = useRef<Map<string, string>>(new Map());
 
   // Annotated image viewer state
   type AnnotatedImageItem = {
@@ -384,14 +424,7 @@ const PredictionPage = () => {
 
   const navigate = useNavigate();
 
-  // Auth header helper
-  const getAuthHeaders = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-  };
+  // Removed local getAuthHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Get company name
   const companyName = company?.name || profile?.companies?.name || "";
@@ -1045,12 +1078,12 @@ const PredictionPage = () => {
         timestamp: new Date().toISOString()
       });
 
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, true);
+
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           image: frameBase64,
           confidenceThreshold: confidenceThreshold,
@@ -1392,12 +1425,12 @@ const PredictionPage = () => {
       const headers = await getAuthHeaders();
       const url = apiUrl('/inference/live/start');
       
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, true);
+      
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           modelId: selectedModelId,
           confidenceThreshold: confidenceThreshold,
@@ -1503,7 +1536,10 @@ const PredictionPage = () => {
     try {
       const headers = await getAuthHeaders();
       const url = apiUrl(`/inference/${encodeURIComponent(id)}/status`);
-      const res = await fetch(url, { headers });
+      // Ensure all auth headers are explicitly included with validation
+      const requestHeaders = buildAuthHeaders(headers, false);
+      
+      const res = await fetch(url, { headers: requestHeaders });
 
       if (!res.ok) {
         if (res.status === 404) {
@@ -1805,6 +1841,124 @@ const PredictionPage = () => {
     navigate(`/project/prediction/history/${encodeURIComponent(inferenceId)}`);
   };
 
+  // Helper function to fetch image as blob with authentication
+  const fetchImageAsObjectUrl = useCallback(async (imageUrl: string): Promise<string | null> => {
+    // Check cache first
+    if (imageObjectUrlCache.current.has(imageUrl)) {
+      return imageObjectUrlCache.current.get(imageUrl) || null;
+    }
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(imageUrl, { headers });
+
+      if (!res.ok) {
+        console.warn(`Failed to fetch image: ${imageUrl}`, res.status);
+        return null;
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      imageObjectUrlCache.current.set(imageUrl, objectUrl);
+      return objectUrl;
+    } catch (error) {
+      console.error("Error fetching image:", error);
+      return null;
+    }
+  }, []);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      imageObjectUrlCache.current.forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+      imageObjectUrlCache.current.clear();
+    };
+  }, []);
+
+  // Authenticated Image Component
+  const AuthenticatedImage: React.FC<{
+    src: string;
+    alt: string;
+    className?: string;
+    onClick?: () => void;
+    style?: React.CSSProperties;
+  }> = ({ src, alt, className, onClick, style }) => {
+    const [objectUrl, setObjectUrl] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+      let isMounted = true;
+      let currentObjectUrl: string | null = null;
+
+      const loadImage = async () => {
+        try {
+          setLoading(true);
+          setError(false);
+          const url = await fetchImageAsObjectUrl(src);
+          if (isMounted) {
+            currentObjectUrl = url;
+            setObjectUrl(url);
+            setLoading(false);
+            if (!url) {
+              setError(true);
+            }
+          }
+        } catch (err) {
+          if (isMounted) {
+            setError(true);
+            setLoading(false);
+          }
+        }
+      };
+
+      loadImage();
+
+      return () => {
+        isMounted = false;
+        // Cleanup: If component unmounts before image loads and URL was created but not cached,
+        // revoke it to prevent memory leak
+        if (currentObjectUrl && !imageObjectUrlCache.current.has(src)) {
+          try {
+            URL.revokeObjectURL(currentObjectUrl);
+          } catch (err) {
+            // Ignore errors when revoking (e.g., already revoked)
+            console.warn("Error revoking object URL:", err);
+          }
+        }
+      };
+    }, [src, fetchImageAsObjectUrl]);
+
+    if (error) {
+      return (
+        <div className={`${className} bg-muted flex items-center justify-center`} style={style}>
+          <span className="text-xs text-muted-foreground">Failed to load</span>
+        </div>
+      );
+    }
+
+    if (loading || !objectUrl) {
+      return (
+        <div className={`${className} bg-muted flex items-center justify-center`} style={style}>
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src={objectUrl}
+        alt={alt}
+        className={className}
+        onClick={onClick}
+        style={style}
+        loading="lazy"
+      />
+    );
+  };
+
   // Helper function to normalize annotated images from either structure
   const normalizeAnnotatedImages = (
     images: any,
@@ -1992,18 +2146,18 @@ const PredictionPage = () => {
 
       if (inferenceMode === "dataset") {
         // Existing JSON-based dataset inference
+        // Ensure all auth headers are explicitly included with validation
+        const requestHeaders = buildAuthHeaders(headers, true);
+        
         res = await fetch(url, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          modelId: selectedModelId,
-          datasetId: selectedDatasetId,
-          confidenceThreshold: confidenceThreshold,
-        }),
-      });
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify({
+            modelId: selectedModelId,
+            datasetId: selectedDatasetId,
+            confidenceThreshold: confidenceThreshold,
+          }),
+        });
       } else {
         // New custom upload inference using multipart/form-data
         const formData = new FormData();
@@ -2013,12 +2167,12 @@ const PredictionPage = () => {
           formData.append("files", file);
         });
 
+        // For FormData, ensure auth headers are included but don't set Content-Type
+        const requestHeaders = buildAuthHeaders(headers, false);
+
         res = await fetch(url, {
           method: "POST",
-          headers: {
-            ...headers,
-            // Do not set Content-Type here; the browser will set it with the correct boundary
-          },
+          headers: requestHeaders,
           body: formData,
         });
       }
@@ -2126,15 +2280,19 @@ const PredictionPage = () => {
       if (currentInferenceId && isRunning) {
         getAuthHeaders().then(headers => {
           const url = apiUrl(`/inference/live/${encodeURIComponent(currentInferenceId)}/stop`);
-          fetch(url, {
-            method: 'POST',
-            headers: {
-              ...headers,
-              'Content-Type': 'application/json',
-            },
-          }).catch(() => {
-            // Ignore errors during cleanup
-          });
+          // Ensure all auth headers are explicitly included with validation
+          try {
+            const requestHeaders = buildAuthHeaders(headers, true);
+            fetch(url, {
+              method: 'POST',
+              headers: requestHeaders,
+            }).catch(() => {
+              // Ignore errors during cleanup
+            });
+          } catch (err) {
+            // Ignore auth errors during cleanup
+            console.warn("Failed to build auth headers during cleanup:", err);
+          }
         }).catch(() => {
           // Ignore errors during cleanup
         });
@@ -2532,23 +2690,25 @@ const PredictionPage = () => {
                 {/* Control Buttons */}
                 <div className="flex items-center gap-2 pt-2 border-t">
                   {!isLiveInferenceRunning ? (
-                    <Button
-                      onClick={handleStartLiveInference}
-                      disabled={!selectedModelId || startingInference || cameraPermission === 'denied'}
-                      className="flex-1"
-                    >
-                      {startingInference ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Starting...
-                        </>
-                      ) : (
-                        <>
-                          <Play className="mr-2 h-4 w-4" />
-                          Start Live Inference
-                        </>
-                      )}
-                    </Button>
+                    hasPermission("runInference") ? (
+                      <Button
+                        onClick={handleStartLiveInference}
+                        disabled={!selectedModelId || startingInference || cameraPermission === 'denied'}
+                        className="flex-1"
+                      >
+                        {startingInference ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Starting...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="mr-2 h-4 w-4" />
+                            Start Live Inference
+                          </>
+                        )}
+                      </Button>
+                    ) : null
                   ) : (
                     <Button
                       onClick={handleStopLiveInference}
@@ -2885,7 +3045,8 @@ const PredictionPage = () => {
                 inferenceMode === "dataset"
                   ? !!selectedProjectId && !!selectedDatasetId && !!selectedModelId
                   : !!selectedProjectId && !!selectedModelId && testFiles.length > 0;
-              return (
+              const canRunInference = hasPermission("runInference");
+              return canRunInference ? (
             <Button
               onClick={handleStartInference}
                   disabled={!canStart || startingInference}
@@ -2903,14 +3064,14 @@ const PredictionPage = () => {
                 </>
               )}
             </Button>
-              );
+              ) : null;
             })()}
           </CardContent>
         </Card>
       )}
 
       {/* Progress Section - only in New Inference view */}
-      {viewMode === "new" && inferenceStatus !== "idle" && (
+      {viewMode === "new" && inferenceStatus !== "idle" && hasPermission("monitorInference") && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -3183,11 +3344,10 @@ const PredictionPage = () => {
                           onClick={() => openImageViewerAt(idx, imagesArray)}
                         >
                           <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                            <img
+                            <AuthenticatedImage
                               src={img.url}
                               alt={img.filename}
                               className="w-full h-full object-contain"
-                              loading="lazy"
                             />
                                     {img.tag && img.tag !== 'unreviewed' && (
                                       <Badge
@@ -3229,11 +3389,10 @@ const PredictionPage = () => {
                                   }
                                 >
                                   <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                    <img
+                                    <AuthenticatedImage
                                       src={img.url}
                                       alt={img.filename}
                                       className="w-full h-full object-contain"
-                                      loading="lazy"
                                     />
                                     <Badge
                                       variant="outline"
@@ -3269,11 +3428,10 @@ const PredictionPage = () => {
                                   }
                                 >
                                   <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                    <img
+                                    <AuthenticatedImage
                                       src={img.url}
                                       alt={img.filename}
                                       className="w-full h-full object-contain"
-                                      loading="lazy"
                                     />
                                     <Badge
                                       variant="outline"
@@ -3305,11 +3463,10 @@ const PredictionPage = () => {
                               onClick={() => openImageViewerAt(idx, imagesArray)}
                             >
                               <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
-                                <img
+                                <AuthenticatedImage
                                   src={img.url}
                                   alt={img.filename}
                                   className="w-full h-full object-contain"
-                                  loading="lazy"
                                 />
                               </div>
                               <div className="text-xs text-muted-foreground truncate">
@@ -3353,7 +3510,7 @@ const PredictionPage = () => {
 
                   <div className="flex-1 overflow-auto flex items-center justify-center bg-muted rounded-md">
                     {imageViewerImages[imageViewerIndex] && (
-                      <img
+                      <AuthenticatedImage
                         src={imageViewerImages[imageViewerIndex].url}
                         alt={imageViewerImages[imageViewerIndex].filename}
                         className="max-h-[80vh] object-contain transition-transform"
@@ -3612,18 +3769,20 @@ const PredictionPage = () => {
                                       View Results
                                     </Button>
                                   )}
-                                  <Button
-                                    onClick={() => {
-                                      setInferenceId(job.inferenceId);
-                                      setShowDeleteDialog(true);
-                                    }}
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-destructive hover:text-destructive"
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Delete
-                                  </Button>
+                                  <ProtectedComponent requiredPermission="deleteOwnInference">
+                                    <Button
+                                      onClick={() => {
+                                        setInferenceId(job.inferenceId);
+                                        setShowDeleteDialog(true);
+                                      }}
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-destructive hover:text-destructive"
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      Delete
+                                    </Button>
+                                  </ProtectedComponent>
                                 </>
                               )}
                             </div>

@@ -1031,10 +1031,10 @@ const Dashboard = () => {
                 icon={FolderKanban}
                 title="No projects yet"
                 description="Use the left sidebar to create your first project."
-                action={{
+                action={contextIsAdmin || (profile?.role && ["platform_admin", "workspace_admin"].includes(profile.role)) ? {
                   label: "Create Project",
                   onClick: openCreateProject,
-                }}
+                } : undefined}
               />
             )}
           </ul>
