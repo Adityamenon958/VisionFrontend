@@ -1,7 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useImageLoader } from "@/hooks/useImageLoader";
+import { getAuthHeaders } from "@/lib/api/config";
 
 interface ImageViewerProps {
   imageUrl: string | null;
@@ -28,12 +28,93 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   onImageError,
    onImageMetricsChange,
 }) => {
-  const { loaded, error, retry } = useImageLoader(imageUrl);
-  const [imageError, setImageError] = useState(false);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const imageObjectUrlCache = useRef<Map<string, string>>(new Map());
+  const currentObjectUrlRef = useRef<string | null>(null);
+
+  // Fetch image as blob with authentication headers
+  const fetchImageAsObjectUrl = useCallback(async (url: string): Promise<string | null> => {
+    // Check cache first
+    if (imageObjectUrlCache.current.has(url)) {
+      return imageObjectUrlCache.current.get(url) || null;
+    }
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(url, { headers });
+
+      if (!res.ok) {
+        console.warn(`Failed to fetch image: ${url}`, res.status);
+        return null;
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      imageObjectUrlCache.current.set(url, objectUrl);
+      return objectUrl;
+    } catch (error) {
+      console.error("Error fetching image:", error);
+      return null;
+    }
+  }, []);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      imageObjectUrlCache.current.forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+      imageObjectUrlCache.current.clear();
+    };
+  }, []);
+
+  // Load image when URL changes
+  useEffect(() => {
+    if (!imageUrl) {
+      setObjectUrl(null);
+      currentObjectUrlRef.current = null;
+      setLoading(false);
+      setError(false);
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+    setError(false);
+    currentObjectUrlRef.current = null;
+
+    fetchImageAsObjectUrl(imageUrl).then((url) => {
+      if (isMounted) {
+        currentObjectUrlRef.current = url;
+        setObjectUrl(url);
+        setLoading(false);
+        if (!url) {
+          setError(true);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      // Cleanup: If component unmounts before image loads, revoke any pending object URL
+      const urlToCleanup = currentObjectUrlRef.current;
+      if (urlToCleanup && !imageObjectUrlCache.current.has(imageUrl)) {
+        try {
+          URL.revokeObjectURL(urlToCleanup);
+          currentObjectUrlRef.current = null;
+        } catch (err) {
+          // Ignore errors when revoking (e.g., already revoked)
+          console.warn("Error revoking object URL:", err);
+        }
+      }
+    };
+  }, [imageUrl, fetchImageAsObjectUrl]);
 
   const handleLoad = () => {
-    setImageError(false);
+    setError(false);
     if (imgRef.current && onImageMetricsChange) {
       const img = imgRef.current;
       onImageMetricsChange({
@@ -47,13 +128,30 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   };
 
   const handleError = () => {
-    setImageError(true);
+    setError(true);
     onImageError?.();
   };
 
   const handleRetry = () => {
-    setImageError(false);
-    retry();
+    setError(false);
+    setLoading(true);
+    if (imageUrl) {
+      // Clear cache entry and reload
+      if (imageObjectUrlCache.current.has(imageUrl)) {
+        const cachedUrl = imageObjectUrlCache.current.get(imageUrl);
+        if (cachedUrl) {
+          URL.revokeObjectURL(cachedUrl);
+        }
+        imageObjectUrlCache.current.delete(imageUrl);
+      }
+      fetchImageAsObjectUrl(imageUrl).then((url) => {
+        setObjectUrl(url);
+        setLoading(false);
+        if (!url) {
+          setError(true);
+        }
+      });
+    }
   };
 
   if (!imageUrl) {
@@ -64,7 +162,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     );
   }
 
-  if (error || imageError) {
+  if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full space-y-3 p-4">
         <AlertCircle className="h-12 w-12 text-destructive" />
@@ -82,7 +180,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     );
   }
 
-  if (!loaded) {
+  if (loading || !objectUrl) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center space-y-2">
@@ -96,7 +194,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   return (
     <img
       ref={imgRef}
-      src={imageUrl}
+      src={objectUrl}
       alt={imageId ?? "Annotation image"}
       className="max-h-full max-w-full object-contain"
       onLoad={handleLoad}

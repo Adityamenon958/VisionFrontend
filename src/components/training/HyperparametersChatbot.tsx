@@ -58,7 +58,7 @@ export const HyperparametersChatbot: React.FC<HyperparametersChatbotProps> = ({
   const [suggestedParams, setSuggestedParams] = useState<HyperparametersSnapshot | null>(null);
   const [provider, setProvider] = useState<AIProvider>(() => {
     const stored = window.localStorage.getItem("aiProvider");
-    return stored === "gemini" || stored === "ollama" ? stored : "ollama";
+    return stored === "gemini" ? "gemini" : "gemini";
   });
 
   const buildDatasetContext = () => {
@@ -78,7 +78,6 @@ export const HyperparametersChatbot: React.FC<HyperparametersChatbotProps> = ({
     clearMessages,
     stop,
     lastProvider,
-    isOllamaAvailable,
     isGeminiAvailable,
   } = useAIChat({
     provider,
@@ -220,7 +219,6 @@ After your explanation, provide the parameters in JSON format like this:
             <ProviderSelector
               provider={provider}
               onProviderChange={setProvider}
-              isOllamaAvailable={isOllamaAvailable}
               isGeminiAvailable={isGeminiAvailable}
             />
           </SheetHeader>
@@ -258,7 +256,7 @@ After your explanation, provide the parameters in JSON format like this:
                     <div className="text-sm whitespace-pre-wrap">{message.content}</div>
                     {message.role === "assistant" && lastProvider && (
                       <div className="text-xs text-muted-foreground mt-1">
-                        ({lastProvider === "gemini" ? "Gemini" : "Ollama"})
+                        (Gemini)
                       </div>
                     )}
                   </div>

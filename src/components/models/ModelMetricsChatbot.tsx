@@ -56,7 +56,7 @@ export const ModelMetricsChatbot: React.FC<ModelMetricsChatbotProps> = ({ model 
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
   const [provider, setProvider] = useState<AIProvider>(() => {
     const stored = window.localStorage.getItem("aiProvider");
-    return stored === "gemini" || stored === "ollama" ? stored : "ollama";
+    return stored === "gemini" ? "gemini" : "gemini";
   });
 
   const buildMetricsContext = () => {
@@ -81,7 +81,6 @@ export const ModelMetricsChatbot: React.FC<ModelMetricsChatbotProps> = ({ model 
     clearMessages,
     stop,
     lastProvider,
-    isOllamaAvailable,
     isGeminiAvailable,
   } = useAIChat({
     provider,
@@ -220,7 +219,6 @@ Please provide:
             <ProviderSelector
               provider={provider}
               onProviderChange={setProvider}
-              isOllamaAvailable={isOllamaAvailable}
               isGeminiAvailable={isGeminiAvailable}
             />
           </SheetHeader>
@@ -258,7 +256,7 @@ Please provide:
                     <div className="text-sm whitespace-pre-wrap">{message.content}</div>
                     {message.role === "assistant" && lastProvider && (
                       <div className="text-xs text-muted-foreground mt-1">
-                        ({lastProvider === "gemini" ? "Gemini" : "Ollama"})
+                        (Gemini)
                       </div>
                     )}
                   </div>

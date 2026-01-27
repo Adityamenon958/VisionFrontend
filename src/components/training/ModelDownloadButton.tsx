@@ -9,6 +9,7 @@ import {
 import { Loader2, Download, FileDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import * as modelsApi from "@/lib/api/models";
+import { getAuthHeaders, apiUrl } from "@/lib/api/config";
 
 interface ModelDownloadButtonProps {
   modelId: string;
@@ -50,34 +51,22 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
     onDownloadStart?.();
 
     try {
-      // Get signed download URL
-      const { downloadUrl, fileSize } = await modelsApi.getModelDownloadUrl(
-        modelId,
-        format
-      );
+      // Get metadata (including file size) via authenticated API
+      const { fileSize } = await modelsApi.getModelDownloadUrl(modelId, format);
 
-      // Download file
-      const response = await fetch(downloadUrl);
+      // Download file using authenticated request to the download endpoint
+      const headers = await getAuthHeaders();
+      const downloadPath = `/models/${encodeURIComponent(
+        modelId
+      )}/download?format=${format}`;
+      const response = await fetch(apiUrl(downloadPath), { headers });
+
       if (!response.ok) {
-        // If URL expired, retry with fresh URL
-        if (response.status === 403 || response.status === 404) {
-          const { downloadUrl: freshUrl } = await modelsApi.getModelDownloadUrl(
-            modelId,
-            format
-          );
-          const retryResponse = await fetch(freshUrl);
-          if (!retryResponse.ok) {
-            throw new Error(`Download failed: ${retryResponse.status}`);
-          }
-          const blob = await retryResponse.blob();
-          downloadBlob(blob, modelName, format, fileSize);
-        } else {
-          throw new Error(`Download failed: ${response.status}`);
-        }
-      } else {
-        const blob = await response.blob();
-        downloadBlob(blob, modelName, format, fileSize);
+        throw new Error(`Download failed: ${response.status}`);
       }
+
+      const blob = await response.blob();
+      downloadBlob(blob, modelName, format, fileSize);
 
       toast({
         title: "Download complete",

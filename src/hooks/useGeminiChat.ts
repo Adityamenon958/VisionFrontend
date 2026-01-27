@@ -1,10 +1,14 @@
 import { useState, useCallback } from "react";
-import type { ChatMessage } from "@/lib/services/ollamaService";
 import { askAI, type AISource } from "@/lib/api/ai";
 import { useToast } from "@/hooks/use-toast";
 
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
 interface UseGeminiChatOptions {
-  provider: "ollama" | "gemini";
+  provider: "gemini";
   source: AISource;
   contextBuilder: () => Record<string, unknown>;
   onError?: (error: Error) => void;
@@ -15,7 +19,7 @@ export const useGeminiChat = (options: UseGeminiChatOptions) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isAvailable, setIsAvailable] = useState<boolean | null>(true);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
-  const [lastProvider, setLastProvider] = useState<"ollama" | "gemini" | null>(null);
+  const [lastProvider, setLastProvider] = useState<"gemini" | null>(null);
   const { toast } = useToast();
 
   const clearMessages = useCallback(() => {

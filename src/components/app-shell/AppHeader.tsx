@@ -16,7 +16,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 
 export const AppHeader: React.FC = () => {
   const navigate = useNavigate();
-  const { profile, isAdmin, company, loading, sessionReady } = useProfile();
+  const { profile, isAdmin, company, loading, sessionReady, hasPermission } = useProfile();
   const { isOnline, isLoading: backendStatusLoading } = useBackendStatus();
   const { theme, toggleTheme } = useTheme();
   const [pendingRequestCount, setPendingRequestCount] = useState(0);
@@ -179,8 +179,8 @@ export const AppHeader: React.FC = () => {
                 )}
               </Button>
 
-              {/* Notification Bell Icon - Admin Only */}
-              {sessionReady && !loading && isAdmin && profile?.email && (
+              {/* Notification Bell Icon - Workspace Admin Only */}
+              {sessionReady && !loading && hasPermission("manageWorkspaceUsers") && profile?.email && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -207,8 +207,8 @@ export const AppHeader: React.FC = () => {
         </div>
       </header>
 
-      {/* Join Requests Side Panel - Admin Only */}
-      {sessionReady && !loading && isAdmin && profile?.email && (
+      {/* Join Requests Side Panel - Workspace Admin Only */}
+      {sessionReady && !loading && hasPermission("manageWorkspaceUsers") && profile?.email && (
         <JoinRequestsSidePanel
           open={showRequestsPanel}
           onOpenChange={setShowRequestsPanel}
