@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Plus, FolderKanban } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { fadeInUpVariants } from "@/utils/animations";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -110,13 +111,15 @@ export const ProjectsPage: React.FC = () => {
         title="Projects"
         description="Create and manage your dataset projects"
         actions={
-          <Button 
-            onClick={handleCreateProject}
-            disabled={!profile?.company_id}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Project
-          </Button>
+          <ProtectedComponent requiredPermission="manageProjects">
+            <Button 
+              onClick={handleCreateProject}
+              disabled={!profile?.company_id}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create Project
+            </Button>
+          </ProtectedComponent>
         }
       />
 
@@ -126,10 +129,10 @@ export const ProjectsPage: React.FC = () => {
             icon={FolderKanban}
             title="No projects yet"
             description="Get started by creating your first project to organize your datasets."
-            action={{
+            action={hasPermission("manageProjects") ? {
               label: "Create Project",
               onClick: handleCreateProject,
-            }}
+            } : undefined}
           />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

@@ -121,4 +121,3 @@ export const AnnotationReviewToolbar: React.FC<AnnotationReviewToolbarProps> = (
     </div>
   );
 };
-

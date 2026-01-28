@@ -58,4 +58,3 @@ export const useImageLoader = (imageUrl: string | null): UseImageLoaderReturn =>
 
   return { loaded, error, retry };
 };
-

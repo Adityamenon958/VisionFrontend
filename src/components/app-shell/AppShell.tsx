@@ -164,7 +164,9 @@ const AppShellContent = () => {
 
             console.log("[AppShell] REFRESH TRIGGERED after long inactivity (visibilitychange)");
             sessionStorage.setItem(HAS_REFRESHED_STORAGE_KEY, "true");
-            window.location.reload();
+            // window.location.reload();
+            console.log("[AppShell] Inactivity detected — no reload");
+
           } catch (error) {
             console.error("[AppShell] Error during inactivity refresh:", error);
           } finally {

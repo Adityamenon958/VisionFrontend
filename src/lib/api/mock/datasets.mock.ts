@@ -28,4 +28,3 @@ export const convertAnnotationsToLabels = async (
     message: "Annotations converted to YOLO label format",
   };
 };
-

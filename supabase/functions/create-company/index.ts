@@ -195,14 +195,14 @@ serve(async (req) => {
       );
     }
 
-    // Update profile with company_id, role='admin', and ensure email matches admin_email
+    // Update profile with company_id, role='workspace_admin', and ensure email matches admin_email
     // This ensures profile.email === company.admin_email for admin detection
-    // Sets role='admin' explicitly for the company creator
+    // Sets role='workspace_admin' explicitly for the company creator
     const { error: updateProfileError } = await supabase
       .from("profiles")
       .update({ 
         company_id: company.id,
-        role: 'admin', // Set creator as admin
+        role: 'workspace_admin', // Set creator as workspace_admin
         email: adminEmail, // Ensure profile email matches company admin_email
       })
       .eq("id", user.id);

@@ -11,6 +11,7 @@ import { InviteUserDialog } from "@/components/InviteUserDialog";
 import { useProfile } from "@/hooks/useProfile";
 import { useSidebar } from "./sidebar-context";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 import {
   LayoutDashboard,
   FolderKanban,
@@ -43,7 +44,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { profile, isAdmin, company, loading: profileLoading } = useProfile();
+  const { profile, isAdmin, company, loading: profileLoading, hasPermission, userRole } = useProfile();
   const { toast } = useToast();
   const { isOpen, toggleSidebar } = useSidebar();
   const isMobile = useIsMobile();
@@ -173,7 +174,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
         active: location.pathname === `/dataset/${p.id}`,
       })) : [],
     },
-    ...(isAdmin && companyId
+    ...(hasPermission("manageWorkspaceUsers") && companyId
       ? [
           {
             label: "Team",
@@ -376,17 +377,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                   {/* Projects submenu */}
                   {item.label === "Projects" && isProjectsExpanded && isOpen && (
                     <div className="ml-6 mt-1 space-y-1">
-                      <div className="relative">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="w-full justify-start"
-                        onClick={handleCreateProject}
-                        disabled={!companyId}
-                      >
-                        <Plus className="mr-2 h-4 w-4" />
-                        Create Project
-                      </Button>
+                      <ProtectedComponent requiredPermission="manageProjects">
+                        <div className="relative">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start"
+                            onClick={handleCreateProject}
+                            disabled={!companyId}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Create Project
+                          </Button>
                         {!companyId && (
                           <div
                             className="absolute inset-0 cursor-not-allowed"
@@ -405,7 +407,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                             }}
                           />
                         )}
-                      </div>
+                        </div>
+                      </ProtectedComponent>
 
                       <Button
                         variant="ghost"
@@ -490,7 +493,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                         Prediction (Testing)
                       </Button>
 
-                      {isAdmin && companyId && (
+                      {hasPermission("manageWorkspaceUsers") && companyId && (
                         <Button
                           variant="ghost"
                           size="sm"

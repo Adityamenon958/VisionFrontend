@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/hooks/useProfile";
+import { getAuthHeaders } from "@/lib/api/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +45,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { fadeInUpVariants, staggerContainerVariants } from "@/utils/animations";
+import { ClassNameDialog } from "@/components/dataset/ClassNameDialog";
+import { getDetectedClasses, type DetectedClassesResponse } from "@/lib/api/categories";
+import { ProtectedComponent } from "@/components/permissions/ProtectedComponent";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim();
 const apiUrl = (path: string) => {
@@ -113,6 +117,7 @@ interface FileEntry {
   folder?: string;
   storedPath: string;
   thumbnailAvailable?: boolean;
+  thumbnailUrl?: string | null; // Full URL from backend (preferred over constructing from id)
   url?: string;
   // Legacy fields for backward compatibility
   name?: string;
@@ -129,7 +134,7 @@ const DatasetManager = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const { sessionReady, user } = useProfile();
+  const { sessionReady, user, hasPermission } = useProfile();
   const [project, setProject] = useState<any>(null);
   const [companyName, setCompanyName] = useState<string>("");
   const [version, setVersion] = useState<string>("");
@@ -151,6 +156,11 @@ const DatasetManager = () => {
 
   const [labelledOpen, setLabelledOpen] = useState<boolean>(false);
   const [unlabelledOpen, setUnlabelledOpen] = useState<boolean>(false);
+
+  // Class name dialog state
+  const [showClassNameDialog, setShowClassNameDialog] = useState(false);
+  const [detectedClassesData, setDetectedClassesData] = useState<DetectedClassesResponse | null>(null);
+  const hasShownClassNamePopupRef = useRef<Set<string>>(new Set());
 
   const [versions, setVersions] = useState<VersionEntry[]>([]);
   const [selectedVersionDatasetId, setSelectedVersionDatasetId] = useState<string | null>(null);
@@ -248,14 +258,7 @@ const DatasetManager = () => {
   } | null>(null);
   const [loadingDependencies, setLoadingDependencies] = useState<boolean>(false);
 
-  // ------- Auth header helper -------
-  const getAuthHeaders = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-  };
+  // Removed local getAuthHeaders() - using centralized getAuthHeaders() from @/lib/api/config
 
   // Process thumbnail queue when slots become available (throttled to prevent backend overload)
   const processThumbnailQueue = useCallback(() => {
@@ -685,6 +688,7 @@ const DatasetManager = () => {
         folder: file.folder,
         storedPath: file.storedPath || file.path || (file.folder ? `${file.folder}/${file.originalName || file.name}` : file.originalName || file.name || ""),
         thumbnailAvailable: file.thumbnailAvailable,
+        thumbnailUrl: file.thumbnailUrl || null, // Use thumbnailUrl from backend (preferred)
         url: file.url,
         // Legacy fields for backward compatibility
         name: file.originalName || file.name,
@@ -697,9 +701,11 @@ const DatasetManager = () => {
         totalMapped: list.length,
         filesWithIds: list.filter(f => f.id).length,
         filesWithThumbnails: list.filter(f => f.thumbnailAvailable === true).length,
+        filesWithThumbnailUrl: list.filter(f => f.thumbnailUrl).length,
         sampleMapped: list[0] ? {
           id: list[0].id,
           thumbnailAvailable: list[0].thumbnailAvailable,
+          thumbnailUrl: list[0].thumbnailUrl ? 'present' : 'missing',
           originalName: list[0].originalName
         } : null
       });
@@ -1149,9 +1155,40 @@ const DatasetManager = () => {
     return null;
   };
 
+  // ------- Check for detected class IDs and show popup if needed -------
+  const checkForDetectedClasses = useCallback(
+    async (datasetId: string) => {
+      // Prevent duplicate popups for the same dataset
+      if (hasShownClassNamePopupRef.current.has(datasetId)) {
+        return;
+      }
+
+      try {
+        const detectedClasses = await getDetectedClasses(datasetId);
+
+        // Only show popup if:
+        // 1. Class IDs were detected (totalClasses > 0)
+        // 2. Categories don't exist yet (hasCategories === false)
+        if (detectedClasses.totalClasses > 0 && !detectedClasses.hasCategories) {
+          setDetectedClassesData(detectedClasses);
+          setShowClassNameDialog(true);
+          hasShownClassNamePopupRef.current.add(datasetId);
+        }
+      } catch (error: any) {
+        // Non-blocking: Log error but don't show popup
+        // This allows normal dataset usage even if the check fails
+        console.warn("Error checking detected classes:", error);
+        
+        // Don't show popup on error - user can proceed normally
+        // Errors like 404 (dataset not found) or 500 (server error) are handled silently
+      }
+    },
+    []
+  );
+
   // ------- Poll dataset status (GET /dataset/:datasetId/status) -------
   const pollDatasetStatus = useCallback(
-    async (datasetId: string) => {
+    async (datasetId: string, isUnlabeled?: boolean) => {
       setUploadStatus("processing");
       setStatusMessage("Processing dataset...");
 
@@ -1188,9 +1225,26 @@ const DatasetManager = () => {
                 if (metaRes.ok) {
                   const metaJson = await metaRes.json();
                   setMetadata(metaJson);
+                  
+                  // Phase 1: Show notification for unlabeled dataset upload completion
+                  if (isUnlabeled) {
+                    toast({
+                      title: "Upload completed",
+                      description: "Please go to Simulation and annotate the images before training.",
+                      variant: "default",
+                    });
+                  }
                 }
               } catch (err) {
                 console.warn("Failed to fetch final metadata:", err);
+              }
+
+              // Check for detected class IDs (only for labeled datasets)
+              if (!isUnlabeled) {
+                // Small delay to ensure backend has processed everything
+                setTimeout(() => {
+                  checkForDetectedClasses(datasetId);
+                }, 1000);
               }
 
               // fetch full file manifest
@@ -1229,7 +1283,7 @@ const DatasetManager = () => {
         }
       }, 3000);
     },
-    [toast],
+    [toast, checkForDetectedClasses],
   );
 
   // ------- Scroll to upload section handler -------
@@ -1290,11 +1344,6 @@ const DatasetManager = () => {
       formData.append("project", projectName);
       formData.append("version", trimmedVersion);
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
       // Build fileMeta array: map each file's originalName to its folder
       const fileMeta = files.map((file) => {
         // @ts-ignore webkitRelativePath available in supported browsers
@@ -1322,10 +1371,15 @@ const DatasetManager = () => {
       });
 
       const uploadUrl = apiUrl("/dataset/upload");
-      // console.log("upload ->", uploadUrl);
+      // Get all authentication headers including custom X-User-* headers
+      const headers = await getAuthHeaders();
+      // For FormData, remove Content-Type to let browser set it with boundary
+      const uploadHeaders: HeadersInit = { ...headers };
+      delete (uploadHeaders as any)["Content-Type"];
+      
       const res = await fetch(uploadUrl, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: uploadHeaders,
         body: formData,
       });
 
@@ -1380,7 +1434,7 @@ const DatasetManager = () => {
       }
 
       // start polling for server-side processing
-      await pollDatasetStatus(datasetId);
+      await pollDatasetStatus(datasetId, selectedFolderType === "unlabelled");
     } catch (err: any) {
       setUploadStatus("failed");
       setStatusMessage("Upload failed.");
@@ -1837,10 +1891,12 @@ const DatasetManager = () => {
   const FileCard = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    // Only attempt thumbnail when backend explicitly marks it as available
-    const thumbEndpoint = datasetId && file.id && isImage
-      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
-      : null;
+    // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+    const thumbEndpoint = isImage && file.thumbnailUrl
+      ? file.thumbnailUrl
+      : (datasetId && file.id && isImage
+        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+        : null);
 
     return (
       <div
@@ -1884,10 +1940,12 @@ const DatasetManager = () => {
   const FileListItem = ({ file, datasetId }: { file: FileEntry; datasetId: string }) => {
     const isImage = file.type === "image";
     const isLabel = file.type === "label";
-    // Only attempt thumbnail when backend explicitly marks it as available
-    const thumbEndpoint = datasetId && file.id && isImage
-      ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
-      : null;
+    // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+    const thumbEndpoint = isImage && file.thumbnailUrl
+      ? file.thumbnailUrl
+      : (datasetId && file.id && isImage
+        ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(file.id)}/thumbnail`)
+        : null);
 
     return (
       <div
@@ -1979,11 +2037,12 @@ const DatasetManager = () => {
         </div>
       </motion.div>
 
-      <motion.div
-        className="grid md:grid-cols-2 gap-6 mb-8"
-        variants={fadeInUpVariants}
-      >
-        <Card>
+      <ProtectedComponent requiredPermission="uploadDatasets">
+        <motion.div
+          className="grid md:grid-cols-2 gap-6 mb-8"
+          variants={fadeInUpVariants}
+        >
+          <Card>
           <CardHeader className="cursor-pointer" onClick={() => { setLabelledOpen((p) => !p); setUnlabelledOpen(false); }}>
             <CardTitle className="flex justify-between items-center">
               <span>Labelled data</span>
@@ -2076,12 +2135,14 @@ const DatasetManager = () => {
             </CardContent>
           )}
         </Card>
-      </motion.div>
+        </motion.div>
+      </ProtectedComponent>
 
-      <motion.div
-        className="flex items-center justify-between mb-6"
-        variants={fadeInUpVariants}
-      >
+      <ProtectedComponent requiredPermission="uploadDatasets">
+        <motion.div
+          className="flex items-center justify-between mb-6"
+          variants={fadeInUpVariants}
+        >
         <div className="flex items-center gap-4">
           <div className="flex items-end gap-2">
             <div className="w-48">
@@ -2124,7 +2185,8 @@ const DatasetManager = () => {
             )}
           </div>
         </div>
-      </motion.div>
+        </motion.div>
+      </ProtectedComponent>
 
       {/* Progress bar: reflects upload / processing progress from backend only (no fake percentages) */}
       <motion.div
@@ -2199,18 +2261,20 @@ const DatasetManager = () => {
                             >
                               View
                             </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-destructive/40 text-destructive hover:bg-destructive/5"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteVersionClick(v.datasetId);
-                              }}
-                              disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
-                            >
-                              Delete
-                            </Button>
+                            <ProtectedComponent requiredPermission="deleteDatasets">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-destructive/40 text-destructive hover:bg-destructive/5"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteVersionClick(v.datasetId);
+                                }}
+                                disabled={(deletingVersion || loadingDependencies) && versionToDelete === v.datasetId}
+                              >
+                                Delete
+                              </Button>
+                            </ProtectedComponent>
                           </div>
                         </div>
                       ))}
@@ -2220,16 +2284,18 @@ const DatasetManager = () => {
           </Card>
           
           {/* Delete Project Button - Direct button below Versions Card */}
-          <div className="mt-4">
-            <Button
-              variant="destructive"
-              onClick={() => setShowDeleteProjectDialog(true)}
-              disabled={deletingProject}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete Project
-            </Button>
-          </div>
+          <ProtectedComponent requiredPermission="deleteProjects">
+            <div className="mt-4">
+              <Button
+                variant="destructive"
+                onClick={() => setShowDeleteProjectDialog(true)}
+                disabled={deletingProject}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Project
+              </Button>
+            </div>
+          </ProtectedComponent>
         </div>
 
         {/* Dataset Summary */}
@@ -2267,14 +2333,15 @@ const DatasetManager = () => {
       {/* File Browser - Modern File Manager View */}
       <AnimatePresence mode="wait">
       {selectedVersionDatasetId && metadata && (
-        <motion.div
-          key="file-browser"
-          variants={fadeInUpVariants}
-          initial="hidden"
-          animate="visible"
-          exit="hidden"
-        >
-        <Card className="mt-6">
+        <ProtectedComponent requiredPermission="viewRawDatasetImages">
+          <motion.div
+            key="file-browser"
+            variants={fadeInUpVariants}
+            initial="hidden"
+            animate="visible"
+            exit="hidden"
+          >
+          <Card className="mt-6">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
@@ -2429,6 +2496,7 @@ const DatasetManager = () => {
           </CardContent>
         </Card>
         </motion.div>
+        </ProtectedComponent>
       )}
       </AnimatePresence>
 
@@ -2463,10 +2531,13 @@ const DatasetManager = () => {
             {/* Full-size Image with Zoom & Pan */}
             {selectedImageFile && (() => {
               const datasetId = selectedVersionDatasetId || currentDatasetId || "";
-              const imageUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
+              // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
+              const imageUrl = selectedImageFile.thumbnailUrl
+                ? selectedImageFile.thumbnailUrl
+                : apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
               const fallbackUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
               // Try thumbnail as an additional fallback only when backend marks it as available
-              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id
+              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id && !selectedImageFile.thumbnailUrl
                 ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`)
                 : null;
               
@@ -2760,6 +2831,25 @@ const DatasetManager = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Class Name Dialog */}
+      {showClassNameDialog && detectedClassesData && currentDatasetId && (
+        <ClassNameDialog
+          datasetId={currentDatasetId}
+          detectedClasses={detectedClassesData}
+          open={showClassNameDialog}
+          onClose={() => {
+            setShowClassNameDialog(false);
+            setDetectedClassesData(null);
+          }}
+          onSuccess={() => {
+            // Optionally refresh dataset metadata or show success message
+            // The dialog already shows a success toast, so we can just close
+            setShowClassNameDialog(false);
+            setDetectedClassesData(null);
+          }}
+        />
+      )}
     </motion.div>
   );
 };

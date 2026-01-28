@@ -237,4 +237,3 @@ export const batchSaveAnnotations = async (
     errors: errors.length > 0 ? errors : undefined,
   };
 };
-

@@ -124,4 +124,3 @@ export const AnnotationExportButton: React.FC<AnnotationExportButtonProps> = ({
     </DropdownMenu>
   );
 };
-

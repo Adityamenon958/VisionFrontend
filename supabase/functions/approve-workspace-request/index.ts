@@ -122,13 +122,13 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     // 4) Update user profile with company_id and set role
-    // If company was just created, requester is admin (role='admin')
-    // Otherwise, user is joining existing company (role='member')
+    // If company was just created, requester is workspace_admin (role='workspace_admin')
+    // Otherwise, user is joining existing company (role='viewer')
     const { error: profileError } = await supabase
       .from("profiles")
       .update({ 
         company_id: companyId,
-        role: isNewCompany ? 'admin' : 'member'
+        role: isNewCompany ? 'workspace_admin' : 'viewer'
       })
       .eq("id", request.user_id);
 

@@ -1195,6 +1195,12 @@ TypeScript checks are performed during build. Use your IDE for real-time checkin
 #### `AppShell.tsx`
 Main application layout wrapper with header and sidebar.
 
+**Features:**
+- **Tab Refresh Prevention**: Intelligent inactivity detection that prevents unnecessary page refreshes when users briefly switch tabs. The system only refreshes after extended inactivity (30+ minutes) combined with a long tab-hidden duration (5+ minutes).
+- **Activity Tracking**: Monitors user interactions (mouse, keyboard, scroll, touch) to accurately track activity time.
+- **Reload Guard**: Prevents reload loops by ignoring visibility changes within 10 seconds after page load.
+- **Debug Logging**: Includes diagnostic logs (`PAGE LOADED`, `🔥 HARD RELOAD TRIGGERED`) for troubleshooting refresh issues.
+
 #### `AppHeader.tsx`
 Top navigation bar with user menu and notifications.
 
@@ -1571,6 +1577,11 @@ refactor: Simplify authentication flow
 - **Caching**: Training state cached in localStorage
 - **Polling**: Status polling with appropriate intervals
 - **Optimistic Updates**: UI updates before API confirmation
+- **Smart Refresh Management**: 
+  - Prevents unnecessary page refreshes on brief tab switches
+  - Only refreshes after 30+ minutes of inactivity AND 5+ minutes of tab being hidden
+  - Includes 5-second grace period where user activity cancels pending refresh
+  - Uses sessionStorage to track activity and tab visibility state
 
 ### Security Considerations
 
@@ -1616,6 +1627,17 @@ refactor: Simplify authentication flow
 #### Database Errors
 - **Problem**: RLS policy errors
 - **Solution**: Verify user has correct company_id, check RLS policies
+
+#### Tab Refresh Issues
+- **Problem**: Page refreshing when switching tabs briefly
+- **Solution**: 
+  - Check console for `PAGE LOADED` log - if it appears twice, it's a real browser reload
+  - Check for `🔥 HARD RELOAD TRIGGERED` log - if present, AppShell is triggering the refresh
+  - Verify tab was hidden for at least 5 minutes before refresh occurs
+  - Verify user was inactive for at least 30 minutes before refresh occurs
+  - Check sessionStorage for `visionm_last_user_activity` and `visionm_last_tab_hidden` keys
+  - The system includes a 10-second guard after page load to prevent immediate reloads
+  - If refresh happens on brief tab switches, check that `MIN_TAB_HIDDEN_DURATION_MS` (5 minutes) threshold is being met
 
 #### Email Issues
 - **Problem**: Email functions failing with "Missing RESEND_API_KEY"
@@ -1729,6 +1751,19 @@ refactor: Simplify authentication flow
 
 ---
 
-**Last Updated**: 18th December 2025  
-**Version**: 1.0.0  
+**Last Updated**: 13th January 2026  
+**Version**: 1.1.0  
 **Maintainer**: VisionM Development Team
+
+### Recent Updates (v1.1.0)
+
+#### Tab Refresh Prevention (January 2026)
+- **Fixed**: Prevented unnecessary page refreshes when users briefly switch tabs
+- **Added**: Intelligent inactivity detection with separate tracking for tab-hidden duration
+- **Added**: Reload guard to prevent reload loops after page load
+- **Added**: Enhanced debug logging for troubleshooting refresh issues
+- **Improved**: Error handling in `useDashboardMetrics` for graceful 404 handling
+- **Files Modified**:
+  - `src/components/app-shell/AppShell.tsx` - Added reload guard, enhanced validation, debug logs
+  - `src/main.tsx` - Added page load marker for debugging
+  - `src/hooks/useDashboardMetrics.ts` - Improved error handling for missing tables

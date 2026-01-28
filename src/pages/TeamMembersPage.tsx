@@ -9,7 +9,7 @@ import { Users } from "lucide-react";
 import { fadeInUpVariants } from "@/utils/animations";
 
 export const TeamMembersPage: React.FC = () => {
-  const { sessionReady, user, profile, isAdmin, loading } = useProfile();
+  const { sessionReady, user, profile, isAdmin, loading, hasPermission } = useProfile();
 
   if (!sessionReady || loading) {
     return <LoadingState message="Loading team members..." />;
@@ -32,7 +32,7 @@ export const TeamMembersPage: React.FC = () => {
     );
   }
 
-  if (!isAdmin) {
+  if (!hasPermission("manageWorkspaceUsers")) {
     return (
       <div>
         <PageHeader title="Team Members" description="Manage your workspace team" />
