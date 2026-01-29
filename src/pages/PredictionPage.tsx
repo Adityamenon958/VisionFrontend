@@ -225,7 +225,18 @@ interface LiveFrameResponse {
   imageHeight?: number; // Original image height sent to backend
 }
 
+/** Single entry from edge live inference (GET /inference/edge/live). Stored for History of live logs. */
+interface LiveLogEntry {
+  id: string;
+  timestamp: string;
+  imageBase64: string;
+  defectClasses: Array<{ className: string; count?: number; confidence?: number } | string>;
+}
+
 const STORAGE_PREFIX = "prediction_";
+const LIVE_LOGS_HISTORY_KEY = "liveLogsHistory";
+const LIVE_LOGS_HISTORY_CAP = 100;
+const LIVE_LOGS_POLL_INTERVAL_MS = 5000;
 type InferenceMode = "dataset" | "custom";
 
 // VideoPlayer component with error handling and loading state
@@ -347,14 +358,25 @@ const PredictionPage = () => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   
   // History view state - initialize from URL query parameter
-  const [viewMode, setViewMode] = useState<"new" | "history">(() => {
+  const [viewMode, setViewMode] = useState<"new" | "history" | "live-logs">(() => {
     const tabParam = searchParams.get("tab");
-    return tabParam === "history" ? "history" : "new";
+    if (tabParam === "history") return "history";
+    if (tabParam === "live-logs") return "live-logs";
+    return "new";
   });
   const [pastInferences, setPastInferences] = useState<InferenceJob[]>([]);
   const [loadingPastInferences, setLoadingPastInferences] = useState(false);
   const [selectedPastInferenceId, setSelectedPastInferenceId] = useState<string | null>(null);
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
+
+  // Live Logs tab: latest from API and stored history
+  const [liveLogsLatest, setLiveLogsLatest] = useState<LiveLogEntry | null>(null);
+  const [liveLogsHistory, setLiveLogsHistory] = useState<LiveLogEntry[]>([]);
+  const [liveLogsLoading, setLiveLogsLoading] = useState(false);
+  const [liveLogsError, setLiveLogsError] = useState<string | null>(null);
+  const [liveLogsEndpointUnavailable, setLiveLogsEndpointUnavailable] = useState(false);
+  const liveLogsPollIntervalRef = useRef<number | null>(null);
+  const liveLogsLastAddedTimestampRef = useRef<string | null>(null);
   
   // Image filter state for tagged inference results
   const [imageFilter, setImageFilter] = useState<'all' | 'good' | 'defect'>('all');
@@ -470,9 +492,26 @@ const PredictionPage = () => {
     const tabParam = searchParams.get("tab");
     if (tabParam === "history") {
       setViewMode("history");
+    } else if (tabParam === "live-logs") {
+      setViewMode("live-logs");
     }
     // If no tab param, keep current viewMode (initialized from URL on mount)
   }, [searchParams]); // Only depend on searchParams to sync URL -> State
+
+  // Load Live Logs history from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_PREFIX}${LIVE_LOGS_HISTORY_KEY}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as LiveLogEntry[];
+        if (Array.isArray(parsed)) {
+          setLiveLogsHistory(parsed.slice(0, LIVE_LOGS_HISTORY_CAP));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Restore inference mode on mount
   useEffect(() => {
@@ -1835,6 +1874,152 @@ const PredictionPage = () => {
     }
   }, [viewMode, sessionReady, companyName, projectName, selectedProjectId, historyStatusFilter, fetchPastInferences]);
 
+  // Normalize API defectClasses to { className, count?, confidence? }[]
+  const normalizeDefectClasses = useCallback(
+    (raw: Array<{ className: string; count?: number; confidence?: number } | string> | undefined): Array<{ className: string; count?: number; confidence?: number }> => {
+      if (!Array.isArray(raw)) return [];
+      return raw.map((item) =>
+        typeof item === "string"
+          ? { className: item }
+          : { className: item.className, count: item.count, confidence: item.confidence }
+      );
+    },
+    []
+  );
+
+  // Fetch latest live log from edge API and optionally append to history
+  const fetchLiveLogsLatest = useCallback(async () => {
+    if (!sessionReady) return;
+    setLiveLogsLoading(true);
+    setLiveLogsError(null);
+    try {
+      let headers = await getAuthHeaders();
+      // Backend requires X-User-Id; ensure it is always set (fallback from profile if needed)
+      const headersObj = headers as Record<string, string>;
+      if (headersObj && (typeof headersObj === "object") && !Array.isArray(headersObj)) {
+        if (!headersObj["X-User-Id"] && profile?.id) {
+          headersObj["X-User-Id"] = profile.id;
+        }
+        if (!headersObj["X-User-Id"]) {
+          setLiveLogsError("Session required for live logs. Please sign in again.");
+          setLiveLogsLoading(false);
+          return;
+        }
+      }
+      const url = apiUrl("/inference/edge/live");
+      const res = await fetch(url, { headers });
+
+      // 404 = endpoint not implemented yet; stop polling to avoid console/network spam
+      if (res.status === 404) {
+        setLiveLogsLoading(false);
+        setLiveLogsEndpointUnavailable(true);
+        if (liveLogsPollIntervalRef.current) {
+          clearInterval(liveLogsPollIntervalRef.current);
+          liveLogsPollIntervalRef.current = null;
+        }
+        return;
+      }
+
+      if (res.status === 204) {
+        setLiveLogsLoading(false);
+        return;
+      }
+
+      if (res.status === 401) {
+        setLiveLogsLoading(false);
+        setLiveLogsEndpointUnavailable(true);
+        if (liveLogsPollIntervalRef.current) {
+          clearInterval(liveLogsPollIntervalRef.current);
+          liveLogsPollIntervalRef.current = null;
+        }
+        try {
+          const body = await res.json();
+          const msg = body?.message || body?.error || "Authentication required for live logs.";
+          setLiveLogsError(msg);
+        } catch {
+          setLiveLogsError("Authentication required for live logs.");
+        }
+        return;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text();
+        setLiveLogsError(errText || `Failed to fetch live logs (${res.status})`);
+        setLiveLogsLoading(false);
+        return;
+      }
+
+      const data = await res.json();
+      const timestamp = data?.timestamp ?? new Date().toISOString();
+      const imageBase64 = data?.imageBase64 ?? "";
+      const defectClasses = normalizeDefectClasses(data?.defectClasses);
+
+      if (!imageBase64 && defectClasses.length === 0) {
+        setLiveLogsLoading(false);
+        return;
+      }
+
+      const entry: LiveLogEntry = {
+        id: `${timestamp}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        timestamp,
+        imageBase64: imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`,
+        defectClasses,
+      };
+
+      setLiveLogsLatest(entry);
+
+      // Only append to history when this is a new entry (avoid duplicates from repeated polls)
+      const lastAdded = liveLogsLastAddedTimestampRef.current;
+      if (lastAdded !== entry.timestamp) {
+        liveLogsLastAddedTimestampRef.current = entry.timestamp;
+        setLiveLogsHistory((prev) => {
+          const next = [entry, ...prev].slice(0, LIVE_LOGS_HISTORY_CAP);
+          try {
+            localStorage.setItem(`${STORAGE_PREFIX}${LIVE_LOGS_HISTORY_KEY}`, JSON.stringify(next));
+          } catch {
+            // ignore
+          }
+          return next;
+        });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to fetch live logs";
+      setLiveLogsError(message);
+    } finally {
+      setLiveLogsLoading(false);
+    }
+  }, [sessionReady, profile?.id, normalizeDefectClasses]);
+
+  // Poll live logs every 5s when Live Logs tab is active; stop on 404/401 to avoid spam
+  useEffect(() => {
+    if (viewMode !== "live-logs") {
+      if (liveLogsPollIntervalRef.current) {
+        clearInterval(liveLogsPollIntervalRef.current);
+        liveLogsPollIntervalRef.current = null;
+      }
+      setLiveLogsEndpointUnavailable(false);
+      return;
+    }
+    if (liveLogsEndpointUnavailable) {
+      if (liveLogsPollIntervalRef.current) {
+        clearInterval(liveLogsPollIntervalRef.current);
+        liveLogsPollIntervalRef.current = null;
+      }
+      return;
+    }
+    void fetchLiveLogsLatest();
+    const interval = setInterval(() => {
+      void fetchLiveLogsLatest();
+    }, LIVE_LOGS_POLL_INTERVAL_MS);
+    liveLogsPollIntervalRef.current = interval as unknown as number;
+    return () => {
+      if (liveLogsPollIntervalRef.current) {
+        clearInterval(liveLogsPollIntervalRef.current);
+        liveLogsPollIntervalRef.current = null;
+      }
+    };
+  }, [viewMode, liveLogsEndpointUnavailable, fetchLiveLogsLatest]);
+
   // View results for a past inference (navigate to dedicated details page)
   const loadPastInferenceResults = (inferenceId: string) => {
     setSelectedPastInferenceId(inferenceId);
@@ -2446,20 +2631,23 @@ const PredictionPage = () => {
       {/* Tabs for New Inference and History */}
       <motion.div variants={fadeInUpVariants}>
       <Tabs value={viewMode} onValueChange={(value) => {
-        const newMode = value as "new" | "history";
+        const newMode = value as "new" | "history" | "live-logs";
         setViewMode(newMode);
         // Update URL query parameter
         const newSearchParams = new URLSearchParams(searchParams);
         if (newMode === "history") {
           newSearchParams.set("tab", "history");
+        } else if (newMode === "live-logs") {
+          newSearchParams.set("tab", "live-logs");
         } else {
           newSearchParams.delete("tab");
         }
         setSearchParams(newSearchParams, { replace: true });
       }}>
-        <TabsList className="grid w-full max-w-md grid-cols-2">
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="new">New Inference</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
+          <TabsTrigger value="live-logs">Live Logs</TabsTrigger>
         </TabsList>
 
         {/* Project Selection */}
@@ -3868,6 +4056,121 @@ const PredictionPage = () => {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* Live Logs Tab */}
+        <TabsContent value="live-logs" className="space-y-6">
+          {/* Live view: latest entry from edge (polled every 5s) */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Live view</CardTitle>
+              <CardDescription>
+                Latest inference from the edge device (updates every 5 seconds)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {liveLogsError && (
+                <p className="text-sm text-destructive">{liveLogsError}</p>
+              )}
+              {liveLogsLoading && !liveLogsLatest && (
+                <div className="flex items-center justify-center py-8 text-muted-foreground">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Waiting for edge device…
+                </div>
+              )}
+              {liveLogsEndpointUnavailable && !liveLogsLatest && !liveLogsError && (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  Edge live API not available. Add GET /inference/edge/live to your backend, then switch to another tab and back to retry.
+                </p>
+              )}
+              {!liveLogsLoading && !liveLogsLatest && !liveLogsError && !liveLogsEndpointUnavailable && (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  Connect your edge device. Data will appear here when the backend receives live inference results.
+                </p>
+              )}
+              {liveLogsLatest && (
+                <motion.div
+                  key={liveLogsLatest.id}
+                  variants={fadeInUpVariants}
+                  initial="hidden"
+                  animate="visible"
+                  className="space-y-3"
+                >
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>
+                      {new Date(liveLogsLatest.timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="relative aspect-video bg-muted rounded-md overflow-hidden max-w-2xl">
+                    <img
+                      src={liveLogsLatest.imageBase64}
+                      alt="Latest inference"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                  {liveLogsLatest.defectClasses.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      <span className="text-sm font-medium">Defect classes:</span>
+                      {normalizeDefectClasses(liveLogsLatest.defectClasses).map((dc, idx) => (
+                        <Badge key={idx} variant="outline">
+                          {dc.className}
+                          {dc.count != null ? ` (${dc.count})` : ""}
+                          {dc.confidence != null ? ` ${dc.confidence <= 1 ? (dc.confidence * 100).toFixed(0) : dc.confidence.toFixed(0)}%` : ""}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* History of live logs (stored from live fetch) */}
+          <Card>
+            <CardHeader>
+              <CardTitle>History of live logs</CardTitle>
+              <CardDescription>
+                Past live log entries received from the edge device (stored locally, max {LIVE_LOGS_HISTORY_CAP})
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {liveLogsHistory.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  No live log history yet. Entries will appear here as they are received.
+                </p>
+              ) : (
+                <div className="space-y-4 max-h-[480px] overflow-auto">
+                  {liveLogsHistory.map((entry) => (
+                    <Card key={entry.id} className="border-muted overflow-hidden">
+                      <CardContent className="p-3 space-y-2">
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(entry.timestamp).toLocaleString()}
+                        </div>
+                        <div className="relative aspect-video bg-muted rounded overflow-hidden max-w-md">
+                          <img
+                            src={entry.imageBase64}
+                            alt={`Inference ${entry.timestamp}`}
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+                        {entry.defectClasses.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {normalizeDefectClasses(entry.defectClasses).map((dc, idx) => (
+                              <Badge key={idx} variant="secondary" className="text-xs">
+                                {dc.className}
+                                {dc.count != null ? ` ${dc.count}` : ""}
+                                {dc.confidence != null ? ` ${dc.confidence <= 1 ? (dc.confidence * 100).toFixed(0) : dc.confidence.toFixed(0)}%` : ""}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
       </motion.div>
