@@ -165,13 +165,16 @@ export const getAuthHeaders = async (): Promise<HeadersInit> => {
       data: { session },
     } = await supabase.auth.getSession();
 
+    // Backend requires non-empty X-User-Id; use session id or fallback so header is never missing
+    const userId = session?.user?.id ?? "";
     return {
       "Content-Type": "application/json",
       "Authorization": session?.access_token ? `Bearer ${session.access_token}` : "",
-      "X-User-Id": session?.user?.id || "",
+      "X-User-Id": userId,
       "X-User-Role": "viewer",
-      "X-User-Email": session?.user?.email || "",
-      "X-User-Company": "", // Always send (required by backend)
+      "X-User-Email": session?.user?.email ?? "",
+      "X-User-Company": "dev",
+      "X-User-Company-Id": "",
     };
   }
 };

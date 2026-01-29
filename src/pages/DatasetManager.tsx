@@ -235,6 +235,11 @@ const DatasetManager = () => {
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
+  // Authenticated blob URL for raw dataset image in modal (so img request includes auth)
+  const [modalImageObjectUrl, setModalImageObjectUrl] = useState<string | null>(null);
+
+  const zoomContainerRef = useRef<HTMLDivElement | null>(null);
+
   // Delete project state
   const [showDeleteProjectDialog, setShowDeleteProjectDialog] = useState<boolean>(false);
   const [deletingProject, setDeletingProject] = useState<boolean>(false);
@@ -921,6 +926,12 @@ const DatasetManager = () => {
     setNavigableFiles(deduplicated);
   }, [getFilteredFiles, deduplicateFiles]);
 
+  // Image-only list for full image viewer (backend serves images only at GET /dataset/:id/file/:fileId)
+  const navigableImageFiles = useMemo(
+    () => navigableFiles.filter((f) => f.type === "image"),
+    [navigableFiles]
+  );
+
   // Keyboard event handler will be defined after navigation functions
 
   // Zoom and pan functions
@@ -963,6 +974,21 @@ const DatasetManager = () => {
       setZoomLevel(prev => Math.max(0.5, Math.min(5, prev + delta)));
     }
   };
+
+  // Non-passive wheel listener so preventDefault works (stops page scroll when zooming)
+  useEffect(() => {
+    const el = zoomContainerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        setZoomLevel(prev => Math.max(0.5, Math.min(5, prev + delta)));
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [selectedImageFile?.id]);
 
   const handleImageClick = useCallback(async (file: FileEntry) => {
     setSelectedImageFile(file);
@@ -1011,10 +1037,75 @@ const DatasetManager = () => {
       }
     }
     
-    // Set current file index for keyboard navigation - use navigableFiles (already deduplicated)
-    const index = navigableFiles.findIndex(f => f.id === file.id);
+    // Set current file index for keyboard navigation - use image-only list for image viewer
+    const index = navigableImageFiles.findIndex(f => f.id === file.id);
     setCurrentFileIndex(index >= 0 ? index : -1);
-  }, [selectedVersionDatasetId, currentDatasetId, folderFiles, fileManifest, navigableFiles]);
+  }, [selectedVersionDatasetId, currentDatasetId, folderFiles, fileManifest, navigableImageFiles]);
+
+  // Resolve to image file id for GET /dataset/:id/file/:fileId (backend serves images only; label id → 404)
+  const getImageFileIdForViewer = useCallback(
+    (file: FileEntry | null, manifest: FileEntry[]): string | null => {
+      if (!file?.id) return null;
+      if (file.type === "image") return file.id;
+      // Edge case: if we ever have a label selected for image viewer, resolve to paired image
+      const labelBase = file.originalName?.replace(/\.txt$/i, "");
+      const paired = manifest.find(
+        (f) =>
+          f.type === "image" &&
+          f.folder === file.folder &&
+          (f.originalName?.replace(/\.(jpg|jpeg|png)$/i, "") === labelBase ||
+            f.originalName?.replace(/\.(jpg|jpeg|png)$/i, "") === file.originalName?.replace(/\.txt$/i, ""))
+      );
+      return paired?.id ?? null;
+    },
+    []
+  );
+
+  // Fetch raw dataset image with auth for modal (browser cannot send headers on img src)
+  useEffect(() => {
+    const imageFileId = getImageFileIdForViewer(selectedImageFile, fileManifest);
+    if (!imageFileId) {
+      setModalImageObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      return;
+    }
+    const datasetId = selectedVersionDatasetId || currentDatasetId || "";
+    if (!datasetId) return;
+
+    let cancelled = false;
+    const thumbnailUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(imageFileId)}/thumbnail`);
+    const rawUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(imageFileId)}`);
+
+    const loadWithAuth = async () => {
+      const headers = await getAuthHeaders();
+      // Prefer raw file first so modal shows full-size image (not small/blurry thumbnail)
+      let res = await fetch(rawUrl, { method: "GET", headers });
+      if (!res.ok) res = await fetch(thumbnailUrl, { method: "GET", headers });
+      if (cancelled) return;
+      if (!res.ok) {
+        setModalImageObjectUrl(null);
+        return;
+      }
+      const blob = await res.blob();
+      if (cancelled) return;
+      const url = URL.createObjectURL(blob);
+      setModalImageObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    };
+    loadWithAuth();
+
+    return () => {
+      cancelled = true;
+      setModalImageObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+    };
+  }, [selectedImageFile, fileManifest, getImageFileIdForViewer, selectedVersionDatasetId, currentDatasetId]);
 
   const handleLabelClick = useCallback(async (file: FileEntry) => {
     setSelectedLabelFile(file);
@@ -1057,41 +1148,38 @@ const DatasetManager = () => {
 
   // Keyboard navigation functions - defined after handleImageClick and handleLabelClick
   // Calculate index directly from current file to avoid stale state issues
+  // When viewing image, step through image-only list (backend serves images only at /file/:fileId)
   const navigateToNextFile = useCallback(() => {
-    if (navigableFiles.length === 0) return;
     const currentFile = selectedImageFile || selectedLabelFile;
     if (!currentFile) return;
-    
-    // Find current file's index directly from navigableFiles (not from state)
-    const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
-    if (currentIndex === -1) return; // Current file not found in navigable list
-    
-    const nextIndex = (currentIndex + 1) % navigableFiles.length;
-    const nextFile = navigableFiles[nextIndex];
+    const list = selectedImageFile ? navigableImageFiles : navigableFiles;
+    if (list.length === 0) return;
+    const currentIndex = list.findIndex(f => f.id === currentFile.id);
+    if (currentIndex === -1) return;
+    const nextIndex = (currentIndex + 1) % list.length;
+    const nextFile = list[nextIndex];
     if (nextFile.type === "image") {
       handleImageClick(nextFile);
     } else if (nextFile.type === "label") {
       handleLabelClick(nextFile);
     }
-  }, [navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
+  }, [navigableImageFiles, navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
 
   const navigateToPreviousFile = useCallback(() => {
-    if (navigableFiles.length === 0) return;
     const currentFile = selectedImageFile || selectedLabelFile;
     if (!currentFile) return;
-    
-    // Find current file's index directly from navigableFiles (not from state)
-    const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
-    if (currentIndex === -1) return; // Current file not found in navigable list
-    
-    const prevIndex = currentIndex <= 0 ? navigableFiles.length - 1 : currentIndex - 1;
-    const prevFile = navigableFiles[prevIndex];
+    const list = selectedImageFile ? navigableImageFiles : navigableFiles;
+    if (list.length === 0) return;
+    const currentIndex = list.findIndex(f => f.id === currentFile.id);
+    if (currentIndex === -1) return;
+    const prevIndex = currentIndex <= 0 ? list.length - 1 : currentIndex - 1;
+    const prevFile = list[prevIndex];
     if (prevFile.type === "image") {
       handleImageClick(prevFile);
     } else if (prevFile.type === "label") {
       handleLabelClick(prevFile);
     }
-  }, [navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
+  }, [navigableImageFiles, navigableFiles, selectedImageFile, selectedLabelFile, handleImageClick, handleLabelClick]);
 
   // Keyboard event handler - defined after navigation functions
   useEffect(() => {
@@ -1852,11 +1940,20 @@ const DatasetManager = () => {
     }, []);
 
     useEffect(() => {
-      // Only set imgSrc if shouldLoad is true, imgSrc is not set, and we haven't errored
-      if (shouldLoad && !imgSrc && !hasErrored) {
-        setImgSrc(thumbEndpoint);
+      // Only load when in view and not already loaded/errored
+      if (!shouldLoad || imgSrc || hasErrored) return;
+      // Use authenticated fetch for our API URLs (file browser raw dataset)
+      const isOurApiUrl = API_BASE_URL && thumbEndpoint.startsWith(API_BASE_URL);
+      if (isOurApiUrl) {
+        let cancelled = false;
+        fetchThumbnailAsObjectUrl(datasetId, fileId).then((url) => {
+          if (!cancelled && url) setImgSrc(url);
+          else if (!cancelled) setImgSrc(thumbEndpoint);
+        });
+        return () => { cancelled = true; };
       }
-    }, [shouldLoad, thumbEndpoint, imgSrc, hasErrored]);
+      setImgSrc(thumbEndpoint);
+    }, [shouldLoad, thumbEndpoint, imgSrc, hasErrored, datasetId, fileId, fetchThumbnailAsObjectUrl]);
 
     return (
       <img
@@ -2521,7 +2618,7 @@ const DatasetManager = () => {
                 <DialogDescription>
                   {(selectedImageFile?.folder || selectedLabelFile?.folder) && `Folder: ${selectedImageFile?.folder || selectedLabelFile?.folder}`}
                   {(selectedImageFile?.size || selectedLabelFile?.size) && ` • Size: ${((selectedImageFile?.size || selectedLabelFile?.size || 0) / 1024).toFixed(1)} KB`}
-                  {navigableFiles.length > 0 && ` • ${currentFileIndex + 1} of ${navigableFiles.length}`}
+                  {(selectedImageFile ? navigableImageFiles.length : navigableFiles.length) > 0 && ` • ${currentFileIndex + 1} of ${selectedImageFile ? navigableImageFiles.length : navigableFiles.length}`}
                 </DialogDescription>
               </div>
             </div>
@@ -2530,17 +2627,6 @@ const DatasetManager = () => {
           <div className="flex-1 overflow-auto space-y-4">
             {/* Full-size Image with Zoom & Pan */}
             {selectedImageFile && (() => {
-              const datasetId = selectedVersionDatasetId || currentDatasetId || "";
-              // Use thumbnailUrl from backend if available, otherwise construct URL as fallback
-              const imageUrl = selectedImageFile.thumbnailUrl
-                ? selectedImageFile.thumbnailUrl
-                : apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`);
-              const fallbackUrl = apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}`);
-              // Try thumbnail as an additional fallback only when backend marks it as available
-              const thumbnailUrl = selectedImageFile.thumbnailAvailable === true && selectedImageFile.id && !selectedImageFile.thumbnailUrl
-                ? apiUrl(`/dataset/${encodeURIComponent(datasetId)}/file/${encodeURIComponent(selectedImageFile.id)}/thumbnail`)
-                : null;
-              
               return (
                 <div className="flex justify-center relative">
                   {/* Zoom Controls */}
@@ -2583,14 +2669,14 @@ const DatasetManager = () => {
                     </Button>
                   </div>
                   
-                  {/* Image Container with Zoom & Pan */}
+                  {/* Image Container with Zoom & Pan - image loaded with auth token via blob URL */}
                   <div
+                    ref={zoomContainerRef}
                     className="overflow-hidden cursor-move"
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
                     onMouseLeave={handleMouseUp}
-                    onWheel={handleWheel}
                     style={{ 
                       width: '100%', 
                       height: '60vh',
@@ -2609,22 +2695,20 @@ const DatasetManager = () => {
                         justifyContent: 'center'
                       }}
                     >
-                      <img
-                        key={selectedImageFile.id}
-                        src={imageUrl}
-                        alt={selectedImageFile.originalName}
-                        className="max-w-full max-h-full object-contain"
-                        draggable={false}
-                        onError={(e) => {
-                          if ((e.target as HTMLImageElement).src !== fallbackUrl) {
-                            (e.target as HTMLImageElement).src = fallbackUrl;
-                          } else if (thumbnailUrl) {
-                            (e.target as HTMLImageElement).src = thumbnailUrl;
-                          } else {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }
-                        }}
-                      />
+                      {!modalImageObjectUrl ? (
+                        <div className="text-sm text-muted-foreground flex items-center gap-2">
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                          Loading image…
+                        </div>
+                      ) : (
+                        <img
+                          key={selectedImageFile.id}
+                          src={modalImageObjectUrl}
+                          alt={selectedImageFile.originalName}
+                          className="max-w-full max-h-full object-contain"
+                          draggable={false}
+                        />
+                      )}
                     </div>
                   </div>
                   
@@ -2668,10 +2752,11 @@ const DatasetManager = () => {
                 size="sm"
                 onClick={navigateToPreviousFile}
                 disabled={(() => {
-                  if (navigableFiles.length === 0) return true;
+                  const list = selectedImageFile ? navigableImageFiles : navigableFiles;
+                  if (list.length === 0) return true;
                   const currentFile = selectedImageFile || selectedLabelFile;
                   if (!currentFile) return true;
-                  const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
+                  const currentIndex = list.findIndex(f => f.id === currentFile.id);
                   return currentIndex <= 0;
                 })()}
                 title="Previous (←)"
@@ -2684,11 +2769,12 @@ const DatasetManager = () => {
                 size="sm"
                 onClick={navigateToNextFile}
                 disabled={(() => {
-                  if (navigableFiles.length === 0) return true;
+                  const list = selectedImageFile ? navigableImageFiles : navigableFiles;
+                  if (list.length === 0) return true;
                   const currentFile = selectedImageFile || selectedLabelFile;
                   if (!currentFile) return true;
-                  const currentIndex = navigableFiles.findIndex(f => f.id === currentFile.id);
-                  return currentIndex >= navigableFiles.length - 1;
+                  const currentIndex = list.findIndex(f => f.id === currentFile.id);
+                  return currentIndex >= list.length - 1;
                 })()}
                 title="Next (→)"
               >
