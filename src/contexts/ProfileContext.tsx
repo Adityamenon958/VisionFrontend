@@ -4,6 +4,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { isUserAdmin } from "@/lib/utils/adminUtils";
 import { ProfileContext, type ProfileContextType } from "./profile-context";
 import { clearLastRoute } from "@/utils/routePersistence";
+import type { UserRole } from "@/types/roles";
+import { hasPermission as hasPermissionUtil } from "@/lib/utils/permissions";
+import { clearAuthCache } from "@/lib/api/config";
 
 type ProfileProviderProps = {
   children: ReactNode;
@@ -14,6 +17,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
   const [profile, setProfile] = useState<any | null>(null);
   const [company, setCompany] = useState<any | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
@@ -22,6 +26,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
   // Track in-flight profile loads so multiple callers share the same request
   const loadProfilePromiseRef = useRef<Promise<void> | null>(null);
   const lastProfileUserIdRef = useRef<string | null>(null);
+  const hasInitializedProfileRef = useRef(false);
 
   const loadProfile = useCallback(
     async (session: any) => {
@@ -70,6 +75,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           .eq("id", userId)
           .maybeSingle();
 
+        // Single timeout promise that rejects after 8 seconds
         const profileTimeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(
             () => reject(new Error("Profile fetch timeout after 8 seconds")),
@@ -77,20 +83,11 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           );
         });
 
-          // Add safety timeout wrapper
-          const profileSafetyTimeout = new Promise<{ data: any; error: any }>((resolve) => {
-            setTimeout(() => {
-              resolve({ data: null, error: new Error("Profile fetch safety timeout after 10 seconds") });
-            }, 10000);
-          });
-
-          const profileResult: any = await Promise.race([
-            Promise.race([
-              profileFetchPromise.then((r: any) => ({ data: r.data, error: r.error })),
-              profileTimeoutPromise,
-            ]),
-            profileSafetyTimeout,
-          ]);
+        // Race between the fetch and timeout
+        const profileResult: any = await Promise.race([
+          profileFetchPromise.then((r: any) => ({ data: r.data, error: r.error })),
+          profileTimeoutPromise,
+        ]);
 
           const profileData = profileResult.data;
           const profileError = profileResult.error;
@@ -104,6 +101,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
             setProfile(null);
             setCompany(null);
             setIsAdmin(false);
+            setUserRole(null);
             setLoading(false);
             return;
           }
@@ -111,6 +109,28 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           setProfile(profileData);
           setCompany(null);
           setIsAdmin(false);
+
+          // Derive a UI role from existing profile/company data.
+          // NOTE:
+          // - This is intentionally conservative to avoid changing existing behavior.
+          // - Once the backend exposes explicit roles (platform_admin, workspace_admin, etc.),
+          //   we can map them directly here.
+          let derivedRole: UserRole | null = null;
+
+          // Prefer explicit profile.role if present.
+          const rawRole = (profileData as any).role as string | undefined;
+          
+          // Check for new role system values first
+          if (rawRole === "platform_admin" || rawRole === "workspace_admin" || 
+              rawRole === "ml_engineer" || rawRole === "operator" || rawRole === "viewer") {
+            derivedRole = rawRole as UserRole;
+          } else if (rawRole === "admin") {
+            // Legacy role - map to workspace_admin
+            derivedRole = "workspace_admin";
+          } else if (rawRole === "member") {
+            // Legacy role - map to viewer
+            derivedRole = "viewer";
+          }
 
           if (profileData.company_id) {
             let companyData: any = null;
@@ -168,8 +188,24 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
               const adminStatus = isUserAdmin(profileData, companyData);
               setIsAdmin(adminStatus);
               setProfile({ ...profileData, companies: companyData });
+
+              // If we don't have an explicit role yet but user is treated as admin,
+              // assume workspace_admin for UI purposes (backwards compatible).
+              if (!derivedRole && adminStatus) {
+                derivedRole = "workspace_admin";
+              }
             }
           }
+
+          // Fallback role if still undefined: treat as viewer for UI gating.
+          if (!derivedRole) {
+            derivedRole = "viewer";
+          }
+
+          setUserRole(derivedRole);
+          
+          // Clear auth cache to ensure fresh data on next API call
+          clearAuthCache();
         } catch (err: any) {
           const message = err?.message || "Failed to load profile";
           const isTimeoutError =
@@ -194,6 +230,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
             setProfile(null);
             setCompany(null);
             setIsAdmin(false);
+            setUserRole(null);
           }
         } finally {
           // Always ensure loading is set to false, even if something goes wrong
@@ -254,6 +291,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           setIsAdmin(false);
           setSessionReady(true);
           setLoading(false);
+          setUserRole(null);
           return;
         }
 
@@ -276,6 +314,8 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           // Set sessionReady after loadProfile completes (or timeout)
           // If profile is still loading, it will complete in background
           setSessionReady(true);
+          hasInitializedProfileRef.current = true;
+
           if (isDev) {
             console.log("[ProfileContext] Session hydrated successfully");
           }
@@ -346,20 +386,27 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           setLoading(false);
           setError("Your session expired. Please sign in again.");
         }
-      } else if (
-        event === "SIGNED_IN" ||
-        event === "TOKEN_REFRESHED" ||
-        event === "USER_UPDATED"
-      ) {
-        // Clear explicit sign-out marker on any successful session
+      } else if (event === "SIGNED_IN") {
+        // 🔐 Prevent re-initialization on tab focus
+        if (hasInitializedProfileRef.current) {
+          if (isDev) {
+            console.log("[ProfileContext] Ignoring repeated SIGNED_IN event");
+          }
+          return;
+        }
+      
         try {
           sessionStorage.removeItem("VISIONM_EXPLICIT_SIGNOUT");
-        } catch {
-          // ignore
+        } catch (err) {
+          // Ignore sessionStorage errors (e.g., in private browsing mode)
+          if (isDev) {
+            console.warn("[ProfileContext] Failed to remove sessionStorage item:", err);
+          }
         }
-
+      
+        hasInitializedProfileRef.current = true;
         setUser(session.user);
-        // Don't set sessionReady until loadProfile completes
+      
         try {
           await loadProfile(session);
           setSessionReady(true);
@@ -367,7 +414,17 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           console.error("[ProfileContext] loadProfile threw error in auth state change:", profileError);
           setSessionReady(true);
         }
+      
+      } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        // ✅ Token refresh happens on tab focus — do NOT reload profile
+        if (isDev) {
+          console.log("[ProfileContext] Token refreshed / user updated — skipping profile reload");
+        }
+      
+        setUser(session.user);
+        setSessionReady(true);
       }
+      
     });
 
     return () => {
@@ -380,6 +437,8 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     profile,
     company,
     isAdmin,
+    userRole,
+    hasPermission: (permission) => hasPermissionUtil(userRole, permission),
     loading,
     user,
     sessionReady,

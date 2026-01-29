@@ -22,6 +22,7 @@ import { useAnnotationShortcuts } from "@/hooks/useAnnotationShortcuts";
 import { supabase } from "@/integrations/supabase/client";
 import * as annotationsApi from "@/lib/api/annotations";
 import * as categoriesApi from "@/lib/api/categories";
+import * as modelsApi from "@/lib/api/models";
 import type { AnnotationState } from "@/types/annotation";
 import type { Category } from "@/types/annotation";
 import { Loader2, Info } from "lucide-react";
@@ -55,7 +56,6 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const {
     images,
@@ -85,6 +85,27 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const { toast } = useToast();
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // Phase 4: Track unsaved bounding boxes
+  const [unsavedBoxes, setUnsavedBoxes] = useState<Array<{ imageId: string; bbox: [number, number, number, number]; categoryId: string; categoryName: string }>>([]);
+  // Phase 7: Track completion state
+  const [isSaveComplete, setIsSaveComplete] = useState(false);
+  const [showUnannotatedDialog, setShowUnannotatedDialog] = useState(false);
+  // Phase 5: Track if we should show only unannotated images
+  const [showOnlyUnannotatedImages, setShowOnlyUnannotatedImages] = useState(false);
+  // Track initialization error for retry
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  
+  // Phase 3: Check if categories exist (defined early to avoid initialization errors)
+  const hasCategories = categories.length > 0;
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const [imageMetrics, setImageMetrics] = useState<{
+    naturalWidth: number;
+    naturalHeight: number;
+    displayWidth: number;
+    displayHeight: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   
@@ -94,6 +115,12 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   const [hasConflicts, setHasConflicts] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
   const conflictCheckIntervalRef = useRef<number | null>(null);
+  // Ref to track current annotations for conflict detection (avoids dependency issues)
+  const annotationsRef = useRef(annotations);
+  // Cache ref for API requests (persists across effect re-runs)
+  const lastFetchTimeRef = useRef<number>(0);
+  // Track ongoing requests to prevent duplicate calls
+  const ongoingRequestRef = useRef<string | null>(null);
 
   // Track image loading state
   const { loaded: imageLoaderLoaded, error: imageError } = useImageLoader(
@@ -113,41 +140,121 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
   useEffect(() => {
     const initialize = async () => {
       setLoading(true);
+      setInitializationError(null);
       try {
+        console.log("[AnnotationWorkspace] Initializing for dataset:", datasetId);
+        
         // Fetch unlabeled images
+        console.log("[AnnotationWorkspace] Fetching unlabeled images...");
         const imagesData = await annotationsApi.getUnlabeledImages(datasetId);
+        console.log("[AnnotationWorkspace] Unlabeled images response:", imagesData);
+        
+        if (!imagesData || !imagesData.images) {
+          throw new Error("Invalid response from unlabeled-images endpoint");
+        }
+        
         loadImages(imagesData.images);
+        console.log("[AnnotationWorkspace] Loaded", imagesData.images.length, "images");
 
         // Auto-select first image
         if (imagesData.images.length > 0) {
           selectImage(0);
+        } else {
+          toast({
+            title: "No unlabeled images",
+            description: "This dataset has no unlabeled images to annotate.",
+            variant: "destructive",
+          });
         }
 
         // Fetch categories
+        console.log("[AnnotationWorkspace] Fetching categories...");
         const categoriesData = await categoriesApi.getCategories(datasetId);
-        setCategories(categoriesData.categories);
+        console.log("[AnnotationWorkspace] Categories response:", categoriesData);
+        
+        if (!categoriesData || !categoriesData.categories) {
+          throw new Error("Invalid response from categories endpoint");
+        }
+        
+        setCategories(categoriesData.categories || []);
 
-        // Set first category as selected
-        if (categoriesData.categories.length > 0) {
-          setCategory(categoriesData.categories[0].id);
+        // Phase 3: Do not auto-select first category - user must explicitly create categories
+        // Show initial notification if no categories exist
+        if (!categoriesData.categories || categoriesData.categories.length === 0) {
+          toast({
+            title: "Add categories first",
+            description: "First, add categories (defect names) before annotating images. Do not annotate good images.",
+            variant: "info",
+          });
         }
       } catch (error) {
-        console.error("Failed to initialize annotation workspace:", error);
+        console.error("[AnnotationWorkspace] Failed to initialize:", error);
+        
+        // Detect connection errors
+        const isConnectionError = 
+          error instanceof TypeError && 
+          (error.message.includes("Failed to fetch") || 
+           error.message.includes("ERR_CONNECTION_REFUSED") ||
+           error.message.includes("NetworkError"));
+        
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        
+        if (isConnectionError) {
+          const connectionErrorMsg = "Cannot connect to the backend server. Please ensure the API server is running and accessible.";
+          setInitializationError(connectionErrorMsg);
+          toast({
+            title: "Connection error",
+            description: connectionErrorMsg,
+            variant: "destructive",
+          });
+        } else {
+          setInitializationError(errorMessage);
+          toast({
+            title: "Failed to load annotation workspace",
+            description: errorMessage,
+            variant: "destructive",
+          });
+        }
       } finally {
         setLoading(false);
       }
     };
 
     void initialize();
-  }, [datasetId, loadImages, selectImage, setCategory]);
+  }, [datasetId, loadImages, selectImage, setCategory, toast]);
 
-  // Fetch annotations when image changes
+  // Keep annotations ref in sync with state (for conflict detection without dependency issues)
+  useEffect(() => {
+    annotationsRef.current = annotations;
+  }, [annotations]);
+
+  // Fetch annotations when image changes (with debouncing and request deduplication)
   useEffect(() => {
     if (!currentImage) return;
 
-    const fetchAnnotations = async () => {
+    const imageId = currentImage.id;
+    const requestKey = `${datasetId}-${imageId}`;
+    const CACHE_DURATION = 2000; // 2 seconds cache
+
+    // Debounce fetch to prevent rapid requests when navigating quickly between images
+    const timeoutId = setTimeout(async () => {
+      const now = Date.now();
+      
+      // Check cache - don't fetch if recently fetched (within 2 seconds)
+      if (now - lastFetchTimeRef.current < CACHE_DURATION) {
+        return;
+      }
+
+      // Prevent duplicate simultaneous requests
+      if (ongoingRequestRef.current === requestKey) {
+        return;
+      }
+
+      ongoingRequestRef.current = requestKey;
+      lastFetchTimeRef.current = now;
+
       try {
-        const data = await annotationsApi.getAnnotations(datasetId, currentImage.id);
+        const data = await annotationsApi.getAnnotations(datasetId, imageId);
         loadAnnotations(data.annotations);
         setSelectedAnnotation(null); // Clear selection on image change
         selection.clearSelection(); // Phase 6: Clear multi-select
@@ -159,23 +266,60 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
           description: error instanceof Error ? error.message : "Unknown error",
           variant: "destructive",
         });
+      } finally {
+        // Clear ongoing request after a short delay to allow cache to work
+        setTimeout(() => {
+          if (ongoingRequestRef.current === requestKey) {
+            ongoingRequestRef.current = null;
+          }
+        }, CACHE_DURATION);
       }
-    };
+    }, 100); // Small debounce (100ms) to batch rapid image changes
 
-    void fetchAnnotations();
-  }, [currentImage?.id, datasetId, loadAnnotations, setSelectedAnnotation, selection]);
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImage?.id, datasetId]); // ✅ FIXED: Removed unstable dependencies
 
-  // Phase 6: Conflict detection - poll for updates
+  // Phase 6: Conflict detection - poll for updates (CRITICAL FIX: Only depend on imageId)
   useEffect(() => {
     if (!currentImage || !imageLoaded) return;
+    
+    // Capture datasetId and imageLoaded from closure (not in dependencies to prevent re-runs)
+    const currentDatasetId = datasetId;
+    const currentImageId = currentImage.id;
+    const requestKey = `${currentDatasetId}-${currentImageId}`;
+
+    // Clear any existing interval first to prevent accumulation
+    if (conflictCheckIntervalRef.current) {
+      clearInterval(conflictCheckIntervalRef.current);
+      conflictCheckIntervalRef.current = null;
+    }
+
+    const CACHE_DURATION = 2000; // 2 seconds cache to prevent redundant requests
+    const POLL_INTERVAL = 5000; // 5 seconds polling interval
 
     const checkForConflicts = async () => {
+      // Only poll if tab is visible
+      if (document.hidden) return;
+
+      const now = Date.now();
+      // Don't fetch if last fetch was < 2 seconds ago (caching) or if request is ongoing
+      if (now - lastFetchTimeRef.current < CACHE_DURATION || ongoingRequestRef.current === requestKey) {
+        return;
+      }
+
+      ongoingRequestRef.current = requestKey;
+      lastFetchTimeRef.current = now;
+
       try {
-        const data = await annotationsApi.getAnnotations(datasetId, currentImage.id);
+        const data = await annotationsApi.getAnnotations(currentDatasetId, currentImageId);
+        
         const latestAnnotations = data.annotations;
 
         // Check if any annotation was updated elsewhere
-        const conflicts = annotations.filter((localAnn) => {
+        // Use ref to access current annotations without adding to dependencies
+        const currentAnnotations = annotationsRef.current;
+        const conflicts = currentAnnotations.filter((localAnn) => {
           const latestAnn = latestAnnotations.find((a) => a.id === localAnn.id);
           if (!latestAnn) return false;
           return latestAnn.updatedAt && localAnn.updatedAt && latestAnn.updatedAt !== localAnn.updatedAt;
@@ -192,18 +336,59 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
       } catch (error) {
         // Silently fail - don't spam errors
         console.error("Conflict check failed:", error);
+      } finally {
+        // Clear ongoing request after cache duration
+        setTimeout(() => {
+          if (ongoingRequestRef.current === requestKey) {
+            ongoingRequestRef.current = null;
+          }
+        }, CACHE_DURATION);
       }
     };
 
-    // Poll every 5 seconds
-    conflictCheckIntervalRef.current = window.setInterval(checkForConflicts, 5000);
+    // Initial check
+    checkForConflicts();
 
-    return () => {
+    // Setup polling with visibility check
+    const startPolling = () => {
       if (conflictCheckIntervalRef.current) {
         clearInterval(conflictCheckIntervalRef.current);
       }
+      conflictCheckIntervalRef.current = window.setInterval(checkForConflicts, POLL_INTERVAL);
     };
-  }, [currentImage?.id, datasetId, annotations, hasConflicts, imageLoaded, toast]);
+
+    const stopPolling = () => {
+      if (conflictCheckIntervalRef.current) {
+        clearInterval(conflictCheckIntervalRef.current);
+        conflictCheckIntervalRef.current = null;
+      }
+    };
+
+    // Handle visibility changes
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+        checkForConflicts(); // Check immediately when tab becomes visible
+      }
+    };
+
+    // Start polling if tab is visible
+    if (!document.hidden) {
+      startPolling();
+    }
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+    // ✅ CRITICAL FIX: Only depend on imageId to prevent interval accumulation
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImage?.id]); // Only imageId - datasetId and imageLoaded captured from closure
 
   // Phase 6: Filter annotations by state
   const filteredAnnotations = useMemo(() => {
@@ -237,66 +422,103 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     }
   }, [selectedCategoryId, selectedAnnotationId, annotations, categories, updateAnnotation, currentImage]);
 
-  // Auto-save debounced function
-  const triggerAutoSave = useCallback(() => {
-    // Clear existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+  // Manual save handler - batch save current annotations on demand
+  const handleSaveAnnotations = useCallback(async () => {
+    if (annotations.length === 0) {
+      markSaved();
+      return;
     }
 
-    // Set unsavedChanges flag (handled by hook)
-    // Debounce save (2 seconds)
-    saveTimeoutRef.current = setTimeout(async () => {
-      if (annotations.length === 0) {
-        markSaved();
-        return;
+    setSaveStatus("saving");
+
+    try {
+      // Prepare annotations for batch save
+      const annotationsToSave = annotations.map((ann) => ({
+        imageId: ann.imageId,
+        bbox: ann.bbox,
+        categoryId: ann.categoryId,
+      }));
+
+      const result = await annotationsApi.batchSaveAnnotations(datasetId, annotationsToSave);
+
+      if (result.failed > 0) {
+        // Handle partial failure
+        toast({
+          title: "Some annotations failed to save",
+          description: `${result.saved} saved, ${result.failed} failed`,
+          variant: "destructive",
+        });
       }
-
-      // Show "Saving..." feedback
-      setSaveStatus("saving");
-
-      try {
-        // Prepare annotations for batch save (only new/updated ones)
-        const annotationsToSave = annotations.map((ann) => ({
-          imageId: ann.imageId,
-          bbox: ann.bbox,
-          categoryId: ann.categoryId,
-        }));
-
-        const result = await annotationsApi.batchSaveAnnotations(datasetId, annotationsToSave);
-        
-        if (result.failed > 0) {
-          // Handle partial failure
-          toast({
-            title: "Some annotations failed to save",
-            description: `${result.saved} saved, ${result.failed} failed`,
-            variant: "destructive",
-          });
-        }
-        markSaved();
-        setSaveStatus("saved");
-        // Clear "Saved" message after 2 seconds
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      } catch (error) {
-        console.error("Failed to save annotations:", error);
-        setSaveStatus("error");
-        setTimeout(() => setSaveStatus("idle"), 3000);
-      }
-    }, 2000);
-  }, [annotations, datasetId, markSaved]);
-
-  // Trigger auto-save when annotations change
-  useEffect(() => {
-    if (annotations.length > 0) {
-      triggerAutoSave();
+      markSaved();
+      setSaveStatus("saved");
+      // Clear "Saved" message after 2 seconds
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch (error) {
+      console.error("Failed to save annotations:", error);
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
     }
-    // Cleanup timeout on unmount
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-    };
-  }, [annotations, triggerAutoSave]);
+  }, [annotations, datasetId, markSaved, toast]);
+
+  // Phase 5 & 6: Save annotations and convert to YOLO
+  const handleSaveAndConvert = useCallback(async (unannotatedImageIds: string[] = []) => {
+    if (!hasCategories) {
+      toast({
+        title: "Categories required",
+        description: "Please add at least one category before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaveStatus("saving");
+
+    try {
+      // Prepare annotations for batch save
+      const annotationsToSave = annotations.map((ann) => ({
+        imageId: ann.imageId,
+        bbox: ann.bbox,
+        categoryId: ann.categoryId,
+      }));
+
+      // Save annotations
+      await annotationsApi.batchSaveAnnotations(datasetId, annotationsToSave);
+
+      // Phase 6: Prepare categories for YOLO conversion (include names)
+      const categoriesForYOLO = categories.map((cat) => ({
+        id: cat.id,
+        name: cat.name,
+      }));
+
+      // Convert to YOLO with category names and unannotated image IDs
+      const convertResult = await modelsApi.convertAnnotationsToLabels(datasetId, {
+        imageIds: undefined, // Convert all images
+        categories: categoriesForYOLO,
+        unannotatedImageIds: unannotatedImageIds, // For empty label files
+      });
+
+      setSaveStatus("saved");
+      setIsSaveComplete(true);
+
+      // Phase 7: Show success notification
+      toast({
+        title: "Success",
+        description: "Your dataset is ready to train.",
+        variant: "success",
+      });
+
+      markSaved();
+    } catch (error) {
+      console.error("Failed to save and convert:", error);
+      setSaveStatus("error");
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Failed to save annotations and convert to YOLO.",
+        variant: "destructive",
+      });
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  }, [annotations, datasetId, categories, hasCategories, markSaved, toast]);
 
   // Handle image selection with unsaved changes confirmation
   const handleImageSelect = useCallback(
@@ -363,9 +585,9 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     return annotatedImageIds.size;
   }, [annotations]);
 
-  // Handle bounding box drawing
+  // Phase 4: Handle bounding box drawing - save immediately when box is complete
   const handleBboxDraw = useCallback(
-    (bbox: [number, number, number, number]) => {
+    async (bbox: [number, number, number, number]) => {
       if (!currentImage || !selectedCategoryId) {
         toast({
           title: "Category required",
@@ -387,14 +609,63 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
       const category = categories.find((c) => c.id === selectedCategoryId);
       if (!category) return;
 
-      addAnnotation({
+      // Phase 4: Add to local state immediately (optimistic update) so user sees the box
+      const newAnnotation = {
         imageId: currentImage.id,
         bbox,
         categoryId: selectedCategoryId,
         categoryName: category.name,
-      });
+      };
+      
+      // Add to local state immediately
+      addAnnotation(newAnnotation);
+
+      // Phase 4: Save immediately when box is complete (one box → one API call)
+      try {
+        const annotationToSave = {
+          imageId: currentImage.id,
+          bbox,
+          categoryId: selectedCategoryId,
+        };
+
+        // Save immediately via API
+        await annotationsApi.batchSaveAnnotations(datasetId, [annotationToSave]);
+        
+        // Mark as saved to clear "Unsaved changes" indicator
+        markSaved();
+        
+        // Remove from unsaved boxes on successful save
+        setUnsavedBoxes((prev) => prev.filter((box) => 
+          !(box.imageId === currentImage.id && 
+            box.bbox[0] === bbox[0] && box.bbox[1] === bbox[1] &&
+            box.bbox[2] === bbox[2] && box.bbox[3] === bbox[3])
+        ));
+      } catch (error) {
+        console.error("Failed to save bounding box:", error);
+        // Add to unsaved boxes if save fails (annotation already in local state)
+        setUnsavedBoxes((prev) => {
+          // Check if already in unsaved boxes to avoid duplicates
+          const exists = prev.some((box) => 
+            box.imageId === currentImage.id && 
+            box.bbox[0] === bbox[0] && box.bbox[1] === bbox[1] &&
+            box.bbox[2] === bbox[2] && box.bbox[3] === bbox[3]
+          );
+          if (exists) return prev;
+          return [...prev, {
+            imageId: currentImage.id,
+            bbox,
+            categoryId: selectedCategoryId,
+            categoryName: category.name,
+          }];
+        });
+        toast({
+          title: "Save failed",
+          description: "Failed to save bounding box. It will be saved when connection is restored.",
+          variant: "destructive",
+        });
+      }
     },
-    [currentImage, selectedCategoryId, categories, addAnnotation, toast, imageLoaded]
+    [currentImage, selectedCategoryId, categories, addAnnotation, toast, imageLoaded, datasetId, markSaved, setUnsavedBoxes]
   );
 
   // Handle annotation click (Phase 6: Support multi-select)
@@ -577,6 +848,14 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
       // D → draw mode
       if ((e.key === "d" || e.key === "D") && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
+        if (!hasCategories) {
+          toast({
+            title: "Categories required",
+            description: "Please add at least one category before drawing.",
+            variant: "destructive",
+          });
+          return;
+        }
         if (!selectedCategoryId) {
           toast({
             title: "Category required",
@@ -613,6 +892,14 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
         redo();
       }
 
+      // Ctrl/Cmd+S → manual save
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        if (unsavedChanges && annotations.length > 0 && saveStatus !== "saving") {
+          void handleSaveAnnotations();
+        }
+      }
+
       // 1-9 → select category
       const categoryIndex = parseInt(e.key) - 1;
       if (
@@ -642,6 +929,7 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     selectedCategoryId,
     selectedAnnotationId,
     categories,
+    hasCategories,
     setDrawing,
     setSelectedAnnotation,
     setCategory,
@@ -650,15 +938,100 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
     handleDeleteAnnotation,
     handlePreviousImage,
     handleNextImage,
+    annotations.length,
+    unsavedChanges,
+    saveStatus,
+    handleSaveAnnotations,
     toast,
   ]);
 
-  if (loading) {
+  // Warn user before leaving the page with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (unsavedChanges) {
+        event.preventDefault();
+        event.returnValue = "";
+        return "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [unsavedChanges]);
+
+  if (loading && !initializationError) {
     return (
       <div className="mt-6 border rounded-lg p-8 flex items-center justify-center">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading annotation workspace...
+        </div>
+      </div>
+    );
+  }
+
+  if (initializationError) {
+    return (
+      <div className="mt-6 border rounded-lg p-8 flex flex-col items-center justify-center gap-4">
+        <div className="text-center space-y-2">
+          <p className="text-sm font-medium text-destructive">Failed to load annotation workspace</p>
+          <p className="text-xs text-muted-foreground">{initializationError}</p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setInitializationError(null);
+              setLoading(true);
+              // Retry initialization by re-running the effect
+              const initialize = async () => {
+                try {
+                  const imagesData = await annotationsApi.getUnlabeledImages(datasetId);
+                  if (!imagesData || !imagesData.images) {
+                    throw new Error("Invalid response from unlabeled-images endpoint");
+                  }
+                  loadImages(imagesData.images);
+                  if (imagesData.images.length > 0) {
+                    selectImage(0);
+                  }
+                  const categoriesData = await categoriesApi.getCategories(datasetId);
+                  if (!categoriesData || !categoriesData.categories) {
+                    throw new Error("Invalid response from categories endpoint");
+                  }
+                  setCategories(categoriesData.categories || []);
+                  if (!categoriesData.categories || categoriesData.categories.length === 0) {
+                    toast({
+                      title: "Add categories first",
+                      description: "First, add categories (defect names) before annotating images. Do not annotate good images.",
+                      variant: "info",
+                    });
+                  }
+                  setInitializationError(null);
+                } catch (error) {
+                  const isConnectionError = 
+                    error instanceof TypeError && 
+                    (error.message.includes("Failed to fetch") || 
+                     error.message.includes("ERR_CONNECTION_REFUSED") ||
+                     error.message.includes("NetworkError"));
+                  const errorMessage = error instanceof Error ? error.message : "Unknown error";
+                  if (isConnectionError) {
+                    setInitializationError("Cannot connect to the backend server. Please ensure the API server is running and accessible.");
+                  } else {
+                    setInitializationError(errorMessage);
+                  }
+                } finally {
+                  setLoading(false);
+                }
+              };
+              void initialize();
+            }}
+          >
+            Retry
+          </Button>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Close
+          </Button>
         </div>
       </div>
     );
@@ -708,8 +1081,46 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
               <span className="ml-2 text-red-500">• Save error</span>
             )}
           </p>
+          {/* Phase 4: Show warning for unsaved boxes */}
+          {unsavedBoxes.length > 0 && (
+            <div className="mt-2 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20 p-2 rounded border border-amber-200 dark:border-amber-800">
+              Some bounding boxes are not saved. Please save them before proceeding.
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Phase 7: Back to Training button (shown after completion) */}
+          {isSaveComplete && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => {
+                // Phase 6: Navigate to Simulation page
+                onClose(); // This will navigate back to simulation via AnnotationPage
+              }}
+            >
+              Back to Training
+            </Button>
+          )}
+          {/* Phase 5: Save Annotations button (triggers YOLO conversion) */}
+          <Button
+            variant="default"
+            size="sm"
+            onClick={async () => {
+              // Phase 5: Check for unannotated images
+              const annotatedImageIds = new Set(annotations.map((ann) => ann.imageId));
+              const imagesWithoutAnnotations = images.filter((img) => !annotatedImageIds.has(img.id));
+              
+              if (imagesWithoutAnnotations.length > 0) {
+                setShowUnannotatedDialog(true);
+              } else {
+                await handleSaveAndConvert();
+              }
+            }}
+            disabled={!hasCategories || annotations.length === 0 || saveStatus === "saving" || isSaveComplete}
+          >
+            {saveStatus === "saving" ? "Saving..." : "Save Annotations"}
+          </Button>
           <AnnotationExportButton
             datasetId={datasetId}
             imageIds={currentImage ? [currentImage.id] : undefined}
@@ -725,15 +1136,7 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
               }
             }}
           />
-          <ConvertToYOLOButton
-            datasetId={datasetId}
-            onConversionComplete={(result) => {
-              toast({
-                title: "Conversion complete",
-                description: result.message,
-              });
-            }}
-          />
+          {/* ConvertToYOLOButton removed - Save Annotations button now handles conversion */}
           {hasConflicts && (
             <Button variant="destructive" size="sm" onClick={handleReloadAnnotations}>
               Reload (Updated elsewhere)
@@ -785,7 +1188,7 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
             onCategorySelect={setCategory}
             onAddCategory={() => setShowCategoryManager(true)}
           />
-          {!selectedCategoryId && (
+          {!selectedCategoryId && hasCategories && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -800,7 +1203,13 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
               </Tooltip>
             </TooltipProvider>
           )}
-          {isDrawing && imageLoaded && (
+          {!hasCategories && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground p-2 rounded border border-muted bg-muted/30">
+              <Info className="h-3 w-3" />
+              <span>Add at least one category before annotating</span>
+            </div>
+          )}
+          {isDrawing && imageLoaded && hasCategories && (
             <div className="text-xs text-blue-500 font-medium flex items-center gap-1">
               <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
               Drawing mode active (Press Esc to cancel)
@@ -812,7 +1221,7 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
               Image loading...
             </div>
           )}
-          {selectedCategoryId && imageLoaded && (
+          {selectedCategoryId && imageLoaded && hasCategories && (
             <div className="text-xs text-muted-foreground">
               Press <kbd className="px-1 py-0.5 bg-muted rounded text-xs">D</kbd> to draw
             </div>
@@ -821,21 +1230,61 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
 
         {/* Center: image + canvas */}
         <div className="border rounded-md p-3 flex flex-col gap-3" role="main" aria-label="Image annotation area">
-          <div className="relative w-full aspect-video border rounded-md overflow-hidden bg-muted flex items-center justify-center">
+          <div
+            ref={imageContainerRef}
+            className="relative w-full aspect-video border rounded-md overflow-hidden bg-muted flex items-center justify-center"
+          >
             <ImageViewer
               imageUrl={currentImage?.url ?? null}
               imageId={currentImage?.id ?? null}
               onImageLoad={() => setImageLoaded(true)}
               onImageError={() => setImageLoaded(false)}
+              onImageMetricsChange={({ naturalWidth, naturalHeight }) => {
+                const container = imageContainerRef.current;
+                if (!container || !naturalWidth || !naturalHeight) {
+                  return;
+                }
+                const rect = container.getBoundingClientRect();
+                const containerWidth = rect.width;
+                const containerHeight = rect.height;
+
+                if (containerWidth <= 0 || containerHeight <= 0) {
+                  return;
+                }
+
+                // object-contain style: uniform scaling to fit within container
+                const scale = Math.min(
+                  containerWidth / naturalWidth,
+                  containerHeight / naturalHeight
+                );
+
+                const displayWidth = naturalWidth * scale;
+                const displayHeight = naturalHeight * scale;
+                const offsetX = (containerWidth - displayWidth) / 2;
+                const offsetY = (containerHeight - displayHeight) / 2;
+
+                setImageMetrics({
+                  naturalWidth,
+                  naturalHeight,
+                  displayWidth,
+                  displayHeight,
+                  offsetX,
+                  offsetY,
+                });
+              }}
             />
-            {imageLoaded && (
+            {imageLoaded && imageMetrics && (
               <BoundingBoxCanvas
-                imageWidth={800}
-                imageHeight={450}
+                imageWidth={imageMetrics.displayWidth}
+                imageHeight={imageMetrics.displayHeight}
+                naturalWidth={imageMetrics.naturalWidth}
+                naturalHeight={imageMetrics.naturalHeight}
+                offsetX={imageMetrics.offsetX}
+                offsetY={imageMetrics.offsetY}
                 annotations={filteredAnnotations}
                 categories={categories}
                 selectedCategoryId={selectedCategoryId}
-                isDrawing={isDrawing && imageLoaded}
+                isDrawing={isDrawing && imageLoaded && hasCategories}
                 selectedAnnotationId={selectedAnnotationId}
                 selectedAnnotationIds={selection.selectedAnnotationIds}
                 onBboxDraw={handleBboxDraw}
@@ -843,18 +1292,24 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
                 onAnnotationUpdate={handleAnnotationUpdate}
               />
             )}
-            {annotations.length === 0 && imageLoaded && (
+            {/* Phase 3: Show message when no categories */}
+            {!hasCategories && imageLoaded && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="text-center space-y-2 p-4 bg-background/80 backdrop-blur-sm rounded-lg border">
                   <p className="text-sm text-muted-foreground">
-                    Draw a bounding box to get started
+                    To start annotating, add at least one category first.
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    Press <kbd className="px-1 py-0.5 bg-muted rounded">D</kbd> to enter drawing mode
-                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => setShowCategoryManager(true)}
+                    className="pointer-events-auto"
+                  >
+                    Add Category
+                  </Button>
                 </div>
               </div>
             )}
+            {/* Removed overlay message - user should add categories first before drawing */}
           </div>
         </div>
 
@@ -864,6 +1319,14 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
           <AnnotationToolbar
             isDrawing={isDrawing}
             onDraw={() => {
+              if (!hasCategories) {
+                toast({
+                  title: "Categories required",
+                  description: "Please add at least one category before drawing.",
+                  variant: "destructive",
+                });
+                return;
+              }
               if (!selectedCategoryId) {
                 toast({
                   title: "Category required",
@@ -952,10 +1415,74 @@ export const AnnotationWorkspace: React.FC<AnnotationWorkspaceProps> = ({
         </DialogContent>
       </Dialog>
 
+      {/* Phase 5: Confirmation dialog for unannotated images */}
+      <Dialog open={showUnannotatedDialog} onOpenChange={setShowUnannotatedDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Save</DialogTitle>
+            <DialogDescription>
+              The images which don't have annotations are good images?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end mt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowUnannotatedDialog(false);
+                // Phase 5: Display the list/grid of images without annotations
+                setShowOnlyUnannotatedImages(true);
+                const annotatedImageIds = new Set(annotations.map((ann) => ann.imageId));
+                const imagesWithoutAnnotations = images.filter((img) => !annotatedImageIds.has(img.id));
+                toast({
+                  title: "Unannotated images",
+                  description: `${imagesWithoutAnnotations.length} image(s) without annotations. Please annotate them or mark as good.`,
+                  variant: "info",
+                });
+              }}
+            >
+              No
+            </Button>
+            <Button
+              variant="default"
+              onClick={async () => {
+                setShowUnannotatedDialog(false);
+                const annotatedImageIds = new Set(annotations.map((ann) => ann.imageId));
+                const imagesWithoutAnnotations = images.filter((img) => !annotatedImageIds.has(img.id));
+                const unannotatedImageIds = imagesWithoutAnnotations.map((img) => img.id);
+                await handleSaveAndConvert(unannotatedImageIds);
+              }}
+            >
+              Yes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Bottom: thumbnails */}
       <div className="border rounded-md p-3" role="navigation" aria-label="Image navigation">
+        {showOnlyUnannotatedImages && (
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm text-muted-foreground">
+              Showing unannotated images only
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowOnlyUnannotatedImages(false)}
+            >
+              Show All
+            </Button>
+          </div>
+        )}
         <ImageThumbnailGrid
-          images={images}
+          images={
+            showOnlyUnannotatedImages
+              ? (() => {
+                  const annotatedImageIds = new Set(annotations.map((ann) => ann.imageId));
+                  return images.filter((img) => !annotatedImageIds.has(img.id));
+                })()
+              : images
+          }
           currentImageId={currentImage?.id ?? null}
           onImageSelect={handleImageSelect}
         />

@@ -109,4 +109,3 @@ export const ConvertToYOLOButton: React.FC<ConvertToYOLOButtonProps> = ({
     </>
   );
 };
-

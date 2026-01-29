@@ -9,6 +9,8 @@ export const convertAnnotationsToLabels = async (
   options?: {
     imageIds?: string[];
     folder?: string;
+    categories?: Array<{ id: string; name: string }>; // Phase 6: Category names for YOLO data.yaml
+    unannotatedImageIds?: string[]; // Phase 5: For creating empty label files for good images
   }
 ): Promise<{
   converted: number;
@@ -59,3 +61,95 @@ export const getModelInfo = async (
   return apiRequest(path);
 };
 
+/**
+ * Scan network for devices with folder access
+ * GET /api/models/:modelId/deploy/scan-devices
+ */
+export const scanNetworkDevices = async (
+  modelId: string,
+  options?: {
+    networkRange?: string;
+    timeout?: number;
+    folderName?: string;
+  }
+): Promise<{
+  devices: Array<{
+    ipAddress: string;
+    deviceName?: string;
+    hasFolderAccess: boolean;
+    folderPath?: string;
+    status: "available" | "unavailable" | "checking";
+    lastChecked?: string;
+  }>;
+  total: number;
+  available: number;
+}> => {
+  const params = new URLSearchParams();
+  if (options?.networkRange) {
+    params.append("networkRange", options.networkRange);
+  }
+  if (options?.timeout) {
+    params.append("timeout", options.timeout.toString());
+  }
+  if (options?.folderName) {
+    params.append("folderName", options.folderName);
+  }
+  const queryString = params.toString();
+  const path = `/models/${encodeURIComponent(modelId)}/deploy/scan-devices${queryString ? `?${queryString}` : ""}`;
+
+  return apiRequest(path);
+};
+
+/**
+ * Check device by IP address
+ * GET /api/models/:modelId/deploy/check-device
+ */
+export const checkDeviceByIp = async (
+  modelId: string,
+  ipAddress: string
+): Promise<{
+  ipAddress: string;
+  deviceName?: string;
+  hasFolderAccess: boolean;
+  folderPath?: string;
+  status: "available" | "unavailable" | "checking";
+  lastChecked?: string;
+}> => {
+  const path = `/models/${encodeURIComponent(modelId)}/deploy/check-device?ipAddress=${encodeURIComponent(ipAddress)}`;
+
+  return apiRequest(path);
+};
+
+/**
+ * Deploy model to device
+ * POST /api/models/:modelId/deploy
+ */
+export const deployModelToDevice = async (
+  modelId: string,
+  config: {
+    ipAddress: string;
+    folderPath: string;
+    deviceName?: string;
+    format?: 'pt' | 'onnx';
+  }
+): Promise<{
+  deploymentId: string;
+  modelId: string;
+  ipAddress: string;
+  folderPath: string;
+  status: string;
+  message: string;
+  startedAt: string;
+}> => {
+  const path = `/models/${encodeURIComponent(modelId)}/deploy`;
+
+  return apiRequest(path, {
+    method: "POST",
+    body: JSON.stringify({
+      ipAddress: config.ipAddress,
+      folderPath: config.folderPath,
+      deviceName: config.deviceName,
+      format: config.format || 'pt', // Default to 'pt' if not provided
+    }),
+  });
+};

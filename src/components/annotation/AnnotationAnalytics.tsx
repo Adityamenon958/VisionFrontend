@@ -200,4 +200,3 @@ export const AnnotationAnalytics: React.FC<AnnotationAnalyticsProps> = ({
     </div>
   );
 };
-

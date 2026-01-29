@@ -3,22 +3,26 @@ import { useState, useEffect, useRef } from "react";
 interface BackendStatus {
   isOnline: boolean;
   isLoading: boolean;
+  wasOffline: boolean; // Track if backend was previously offline (for detecting when it comes back online)
 }
 
-const POLL_INTERVAL_MS = 30000; // 30 seconds
+const POLL_INTERVAL_ONLINE_MS = 30000; // 30 seconds when online
+const POLL_INTERVAL_OFFLINE_MS = 5000; // 5 seconds when offline (faster detection)
 const REQUEST_TIMEOUT_MS = 3000; // 3 seconds timeout
 
 /**
  * Hook to check backend API health status
- * Polls every 30 seconds to check if backend is online
+ * Polls every 30 seconds when online, every 5 seconds when offline
  * 
- * @returns {BackendStatus} Object with isOnline (boolean) and isLoading (boolean)
+ * @returns {BackendStatus} Object with isOnline (boolean), isLoading (boolean), and wasOffline (boolean)
  */
 export const useBackendStatus = (): BackendStatus => {
   const [isOnline, setIsOnline] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [wasOffline, setWasOffline] = useState<boolean>(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const previousStatusRef = useRef<boolean | null>(null);
 
   const checkBackendHealth = async (): Promise<void> => {
     // Get API base URL from environment
@@ -44,8 +48,10 @@ export const useBackendStatus = (): BackendStatus => {
 
     try {
       // Try multiple endpoints in order of preference
+      // Health endpoint is at root level (not under /api), so strip /api if present
+      const baseWithoutApi = apiBaseUrl.replace(/\/api\/?$/, "").replace(/\/+$/, "");
       const endpoints = [
-        `${apiBaseUrl.replace(/\/+$/, "")}/health`, // Try /health first
+        `${baseWithoutApi}/health`, // Try /health first (root level, not /api/health)
         `${apiBaseUrl.replace(/\/+$/, "")}/datasets?limit=1`, // Fallback to lightweight endpoint
       ];
 
@@ -119,12 +125,27 @@ export const useBackendStatus = (): BackendStatus => {
         }
       }
 
+      // Track previous status to detect when backend comes online
+      const previousStatus = previousStatusRef.current;
+      previousStatusRef.current = success;
+      
+      // If backend was offline and now comes online, set wasOffline flag
+      if (previousStatus === false && success === true) {
+        setWasOffline(true);
+        // Reset the flag after a short delay (so components can react to it)
+        setTimeout(() => {
+          setWasOffline(false);
+        }, 1000);
+      }
+      
       setIsOnline(success);
     } catch (error) {
       // Network error or timeout - backend is offline
       if (error instanceof Error && error.name === "AbortError") {
         return; // Component unmounted, don't update state
       }
+      const previousStatus = previousStatusRef.current;
+      previousStatusRef.current = false;
       setIsOnline(false);
     } finally {
       setIsLoading(false);
@@ -135,22 +156,38 @@ export const useBackendStatus = (): BackendStatus => {
     // Initial check
     checkBackendHealth();
 
-    // Set up polling interval
-    intervalRef.current = setInterval(() => {
-      checkBackendHealth();
-    }, POLL_INTERVAL_MS);
+    // Function to set up polling with dynamic interval
+    const setupPolling = () => {
+      // Clear existing interval
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+
+      // Use shorter interval when offline, longer when online
+      // Use current isOnline state value
+      const pollInterval = isOnline ? POLL_INTERVAL_ONLINE_MS : POLL_INTERVAL_OFFLINE_MS;
+      
+      intervalRef.current = setInterval(() => {
+        checkBackendHealth();
+      }, pollInterval);
+    };
+
+    // Set up initial polling (will use current isOnline state)
+    setupPolling();
 
     // Cleanup on unmount
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+        intervalRef.current = null;
       }
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
     };
-  }, []); // Empty deps - only run on mount/unmount
+  }, [isOnline]); // Re-setup polling when isOnline changes to adjust interval
 
-  return { isOnline, isLoading };
+  return { isOnline, isLoading, wasOffline };
 };
 

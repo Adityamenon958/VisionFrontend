@@ -3,8 +3,27 @@ import type { Annotation, Category } from "@/types/annotation";
 import { normalizeBbox, calculateBbox, validateBbox, denormalizeBbox, getResizeHandle } from "@/lib/utils/bboxUtils";
 
 interface BoundingBoxCanvasProps {
+  /**
+   * Displayed image width/height in pixels (what the user sees on screen),
+   * i.e. the actual rendered image area, excluding any letterboxing/padding.
+   */
   imageWidth: number;
   imageHeight: number;
+  /**
+   * Actual image resolution in pixels (natural dimensions of the file).
+   * Normalized coords are ultimately relative to these dimensions, but with
+   * uniform scaling and correct offsets, normalizing by displayed size is
+   * mathematically equivalent while drawing in displayed-image space.
+   */
+  naturalWidth?: number;
+  naturalHeight?: number;
+  /**
+   * Optional offsets (in pixels) of the displayed image inside the canvas
+   * container, used when the image is centered with object-contain and has
+   * letterboxing/pillarboxing around it.
+   */
+  offsetX?: number;
+  offsetY?: number;
   annotations: Annotation[];
   categories?: Category[];
   selectedCategoryId: string | null;
@@ -28,6 +47,10 @@ interface DrawingState {
 export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   imageWidth,
   imageHeight,
+  naturalWidth,
+  naturalHeight,
+  offsetX = 0,
+  offsetY = 0,
   annotations,
   categories = [],
   selectedCategoryId,
@@ -59,22 +82,34 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   const rafRef = useRef<number>();
   const pendingUpdate = useRef<{ x: number; y: number } | null>(null);
 
-  // Get mouse position relative to canvas
+  // Get mouse position relative to the displayed image area (image-local coords)
   const getMousePosition = (e: React.MouseEvent<HTMLDivElement>): { x: number; y: number } => {
     if (!canvasRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
+    const rawX = e.clientX - rect.left;
+    const rawY = e.clientY - rect.top;
+
+    // Translate from container space into image-local space by subtracting offsets.
+    // This ensures drawing and interaction happen in displayed-image coordinates.
+    const imageX = rawX - offsetX;
+    const imageY = rawY - offsetY;
+
+    return { x: imageX, y: imageY };
   };
 
   // Handle mouse down - start drawing or editing
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // Safety check: ensure canvas is ready
+      if (!canvasRef.current) return;
+      
       if (isDrawing && selectedCategoryId) {
         // Drawing mode
         const { x, y } = getMousePosition(e);
+        // Ignore clicks outside the displayed image area
+        if (x < 0 || y < 0 || x > imageWidth || y > imageHeight) {
+          return;
+        }
         setDrawingState({
           startX: x,
           startY: y,
@@ -96,6 +131,10 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
         if (!annotation) return;
 
         const { x, y } = getMousePosition(e);
+        // If click is outside image area, ignore editing start
+        if (x < 0 || y < 0 || x > imageWidth || y > imageHeight) {
+          return;
+        }
         const [nx, ny, nw, nh] = annotation.bbox;
         const pixelBbox = {
           left: nx * imageWidth,
@@ -142,6 +181,9 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   // Handle mouse move - update active box or editing (throttled with RAF)
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // Safety check: ensure canvas is ready
+      if (!canvasRef.current) return;
+      
       const { x, y } = getMousePosition(e);
 
       // Handle drawing
@@ -150,13 +192,15 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
 
         if (!rafRef.current) {
           rafRef.current = requestAnimationFrame(() => {
-            if (pendingUpdate.current) {
+            // Capture the value to avoid race condition
+            const update = pendingUpdate.current;
+            if (update) {
               setDrawingState((prev) => {
                 if (!prev) return null;
                 return {
                   ...prev,
-                  currentX: pendingUpdate.current!.x,
-                  currentY: pendingUpdate.current!.y,
+                  currentX: update.x,
+                  currentY: update.y,
                 };
               });
               pendingUpdate.current = null;
@@ -173,10 +217,13 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
 
         if (!rafRef.current) {
           rafRef.current = requestAnimationFrame(() => {
-            if (pendingUpdate.current && editingState) {
-              const { annotationId, mode, handle, startX, startY, startBbox } = editingState;
-              const dx = pendingUpdate.current.x - startX;
-              const dy = pendingUpdate.current.y - startY;
+            // Capture values to avoid race condition
+            const update = pendingUpdate.current;
+            const editing = editingState;
+            if (update && editing) {
+              const { annotationId, mode, handle, startX, startY, startBbox } = editing;
+              const dx = update.x - startX;
+              const dy = update.y - startY;
 
               let newBbox: [number, number, number, number];
 
@@ -251,7 +298,7 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
     if (drawingState && isDrawing && selectedCategoryId) {
       const { startX, startY, currentX, currentY } = drawingState;
 
-      // Calculate box coordinates using utility
+      // Calculate box coordinates in displayed-image pixels
       const bbox = calculateBbox(startX, startY, currentX, currentY);
 
       // Validate minimum size (10x10 pixels)
@@ -261,7 +308,10 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
         return;
       }
 
-      // Normalize coordinates using utility
+      // Normalize coordinates using displayed-image dimensions.
+      // With uniform scaling between natural and displayed size and offsets removed
+      // earlier, this is mathematically equivalent to normalizing against
+      // naturalWidth / naturalHeight, which is what the backend expects.
       const normalizedBbox = normalizeBbox(bbox, imageWidth, imageHeight);
 
       // Call callback to create annotation
@@ -302,8 +352,11 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
   }>(
     ({ annotation, imageWidth, imageHeight, categoryColor, isSelected, onAnnotationClick }) => {
       const [x, y, width, height] = annotation.bbox;
-      const left = x * imageWidth;
-      const top = y * imageHeight;
+      // Convert normalized coords (relative to actual image) into displayed-image
+      // pixel coords, then add offsets so the box is positioned correctly inside
+      // the canvas/container.
+      const left = x * imageWidth + offsetX;
+      const top = y * imageHeight + offsetY;
       const boxWidth = width * imageWidth;
       const boxHeight = height * imageHeight;
 
@@ -453,8 +506,8 @@ export const BoundingBoxCanvas: React.FC<BoundingBoxCanvasProps> = ({
         <div
           className="absolute border-2 border-dashed opacity-70 pointer-events-none"
           style={{
-            left: `${activeBox.left}px`,
-            top: `${activeBox.top}px`,
+            left: `${activeBox.left + offsetX}px`,
+            top: `${activeBox.top + offsetY}px`,
             width: `${activeBox.width}px`,
             height: `${activeBox.height}px`,
             borderColor: activeCategoryColor,

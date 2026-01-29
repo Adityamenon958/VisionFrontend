@@ -246,4 +246,3 @@ export const AnnotationImportButton: React.FC<AnnotationImportButtonProps> = ({
     </>
   );
 };
-

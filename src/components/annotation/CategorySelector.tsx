@@ -16,37 +16,45 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
   onCategorySelect,
   onAddCategory,
 }) => {
+  const hasCategories = categories.length > 0;
+
   return (
     <div className="space-y-3">
-      <Select
-        value={selectedCategoryId ?? undefined}
-        onValueChange={(value) => onCategorySelect?.(value)}
-      >
-        <SelectTrigger>
-          <SelectValue placeholder="Select category" />
-        </SelectTrigger>
-        <SelectContent>
-          {categories.map((category) => (
-            <SelectItem key={category.id} value={category.id}>
-              <span
-                className="inline-block w-2 h-2 rounded-full mr-2 align-middle"
-                style={{ backgroundColor: category.color }}
-              />
-              {category.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {hasCategories ? (
+        <Select
+          value={selectedCategoryId ?? undefined}
+          onValueChange={(value) => onCategorySelect?.(value)}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select category" />
+          </SelectTrigger>
+          <SelectContent>
+            {categories.map((category) => (
+              <SelectItem key={category.id} value={category.id}>
+                <span
+                  className="inline-block w-2 h-2 rounded-full mr-2 align-middle"
+                  style={{ backgroundColor: category.color }}
+                />
+                {category.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <div className="text-xs text-muted-foreground p-2 border rounded-md bg-muted/50">
+          No categories yet. Click "Add Category" to create one.
+        </div>
+      )}
       <Button
         type="button"
         variant="outline"
         size="sm"
         onClick={onAddCategory}
+        className="w-full"
       >
         Add Category
       </Button>
     </div>
   );
 };
-
 

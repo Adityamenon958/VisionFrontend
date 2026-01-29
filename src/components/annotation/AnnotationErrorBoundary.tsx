@@ -59,4 +59,3 @@ export class AnnotationErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
-

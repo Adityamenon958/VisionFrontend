@@ -23,7 +23,22 @@ export const getUnlabeledImages = async (
     queryParams.toString() ? `?${queryParams.toString()}` : ""
   }`;
 
-  return apiRequest(path);
+  console.log("[getUnlabeledImages] Requesting:", path);
+  
+  try {
+    const result = await apiRequest<{
+      images: Image[];
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    }>(path);
+    console.log("[getUnlabeledImages] Response received:", result);
+    return result;
+  } catch (error) {
+    console.error("[getUnlabeledImages] Error:", error);
+    throw error;
+  }
 };
 
 /**
