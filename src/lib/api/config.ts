@@ -165,8 +165,8 @@ export const getAuthHeaders = async (): Promise<HeadersInit> => {
       data: { session },
     } = await supabase.auth.getSession();
 
-    // Backend requires non-empty X-User-Id; use session id or fallback so header is never missing
-    const userId = session?.user?.id ?? "";
+    // Backend requires non-empty X-User-Id; use session id or a stable fallback
+    const userId = session?.user?.id || "dev-fallback-user";
     return {
       "Content-Type": "application/json",
       "Authorization": session?.access_token ? `Bearer ${session.access_token}` : "",
@@ -323,7 +323,16 @@ export const apiRequest = async <T>(
 
     try {
       const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.error || errorJson.message || errorMessage;
+      // Prefer detailed message when available, fall back to generic error field
+      if (errorJson && typeof errorJson === "object") {
+        if (errorJson.message && typeof errorJson.message === "string") {
+          errorMessage = errorJson.message;
+        } else if (errorJson.error && typeof errorJson.error === "string") {
+          errorMessage = errorJson.error;
+        } else {
+          errorMessage = errorMessage;
+        }
+      }
     } catch {
       if (errorText) {
         errorMessage = errorText;

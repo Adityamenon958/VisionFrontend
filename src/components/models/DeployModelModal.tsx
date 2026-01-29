@@ -188,8 +188,21 @@ export const DeployModelModal: React.FC<DeployModelModalProps> = ({
       setSearchIp("");
       setSelectedFormat('pt');
     } catch (err) {
-      const errorMessage =
+      let errorMessage =
         err instanceof Error ? err.message : "Failed to deploy model";
+
+      // Provide a user-friendly message for permission errors from the backend
+      if (
+        typeof errorMessage === "string" &&
+        (errorMessage.toLowerCase().includes("eperm") ||
+          errorMessage.toLowerCase().includes("operation not permitted") ||
+          errorMessage.toLowerCase().includes("copyfile"))
+      ) {
+        errorMessage =
+          "Deployment failed because the server does not have permission to write to the shared folder on the target device. " +
+          "Please check the network share path and ensure the backend service account has write access, then try again.";
+      }
+
       setError(errorMessage);
       console.error("Deployment error:", err);
     } finally {
