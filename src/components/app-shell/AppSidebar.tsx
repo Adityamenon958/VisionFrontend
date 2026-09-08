@@ -18,6 +18,7 @@ import {
   BrainCircuit,
   Menu,
   FlaskConical,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -78,7 +79,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
         try {
           const { data: projectsData, error } = await supabase
             .from("projects")
-            .select("id, name, description")
+            .select("id, name, description, project_type")
             .eq("company_id", companyId)
             .order("created_at", { ascending: false });
 
@@ -116,6 +117,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
   };
   const handleSimulation = () => navigate("/dashboard?view=simulation");
   const handlePrediction = () => navigate("/project/prediction");
+  // Corrosion Dashboard only makes sense (and only appears) once this company
+  // actually has a project flagged as project_type "corrosion" — it's an
+  // exclusive workflow, not a generic feature every company sees.
+  const hasCorrosionProject = projects.some((p) => p.project_type === "corrosion");
+  const handleCorrosionDashboard = () => navigate("/project/corrosion-dashboard");
   const handleDemoExtinguisherOcr = () => navigate("/demo/extinguisher-ocr");
 
   const isActive = (path: string) => location.pathname === path;
@@ -473,6 +479,25 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({ onNavigate }) => {
                         <BrainCircuit className="mr-2 h-4 w-4" />
                         Testing & Inference
                       </Button>
+
+                      {hasCorrosionProject && hasPermission("viewActions") && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "w-full justify-start",
+                            location.pathname === "/project/corrosion-dashboard" && cn(
+                              "bg-primary/10 dark:bg-primary/20",
+                              "bg-primary/15",
+                              "border-l-2 border-l-primary"
+                            )
+                          )}
+                          onClick={handleCorrosionDashboard}
+                        >
+                          <ShieldAlert className="mr-2 h-4 w-4" />
+                          Corrosion Dashboard
+                        </Button>
+                      )}
 
                       <Button
                         variant="ghost"

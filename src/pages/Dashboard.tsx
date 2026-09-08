@@ -17,6 +17,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import CompanyMembers from "@/components/CompanyMembers";
 import { FormFieldWrapper } from "@/components/FormFieldWrapper";
@@ -51,6 +58,7 @@ const Dashboard = () => {
   const [showCompanyDialog, setShowCompanyDialog] = useState(false);
   const [showCompanyChoiceDialog, setShowCompanyChoiceDialog] = useState(false);
   const [showProjectDialog, setShowProjectDialog] = useState(false);
+  const [projectType, setProjectType] = useState<"generic" | "corrosion">("generic");
   const [showCompanyExistsDialog, setShowCompanyExistsDialog] = useState(false);
   const [loading, setLoading] = useState(false);
   const [joinRequestLoading, setJoinRequestLoading] = useState(false);
@@ -1075,6 +1083,7 @@ const Dashboard = () => {
           description: projectDescription,
           company_id: profile.company_id,
           created_by: user.id,
+          project_type: projectType,
         })
         .select()
         .single();
@@ -1100,6 +1109,7 @@ const Dashboard = () => {
 
       setShowProjectDialog(false);
       projectForm.resetForm();
+      setProjectType("generic");
 
       // navigate to dataset manager for the newly created project
       navigate(`/dataset/${project.id}`);
@@ -1438,6 +1448,21 @@ const Dashboard = () => {
                     {projectForm.getFieldError("projectDescription")}
                   </p>
                 )}
+            </div>
+            <div>
+              <Label htmlFor="project-type">Project type</Label>
+              <Select value={projectType} onValueChange={(v) => setProjectType(v as "generic" | "corrosion")}>
+                <SelectTrigger id="project-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="generic">Generic vision project</SelectItem>
+                  <SelectItem value="corrosion">Corrosion inspection</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Corrosion inspection projects get their own dashboard and can't be changed to generic later.
+              </p>
             </div>
           </div>
           <DialogFooter className="justify-end">

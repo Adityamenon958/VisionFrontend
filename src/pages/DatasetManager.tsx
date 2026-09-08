@@ -3940,6 +3940,7 @@ const DatasetManager = () => {
         open={showEditProjectModal}
         onOpenChange={setShowEditProjectModal}
         project={project ? { id: project.id, name: project.name ?? "", description: project.description } : null}
+        companyName={companyName}
         onSaved={() => {
           // Reload project to get updated name/description
           if (projectId) {

@@ -2970,7 +2970,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                                     <ModelDownloadButton
                                       modelId={model.modelId}
                                       modelName={displayName}
-                                      availableFormats={["pt", "onnx", "zip"]}
+                                      availableFormats={["pt", "onnx", "tflite-float16", "tflite-float32", "zip"]}
                                     />
                                     <ModelDeployButton
                                       modelId={model.modelId}
@@ -3691,7 +3691,7 @@ export const SimulationView: React.FC<SimulationViewProps> = ({ projects, profil
                             <ModelDownloadButton
                               modelId={modelInfo.modelId}
                               modelName={modelInfo.modelVersion || modelInfo.modelId}
-                              availableFormats={["pt", "onnx", "zip"]}
+                              availableFormats={["pt", "onnx", "tflite-float16", "tflite-float32", "zip"]}
                             />
                           </div>
                         )}

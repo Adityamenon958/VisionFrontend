@@ -200,6 +200,7 @@ export const ProjectsPage: React.FC = () => {
           if (!open) setProjectToEdit(null);
         }}
         project={projectToEdit}
+        companyName={company?.name || (profile as { companies?: { name?: string } })?.companies?.name || ""}
         onSaved={loadProjects}
       />
 

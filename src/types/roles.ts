@@ -39,5 +39,10 @@ export interface RolePermissions {
   viewDatasets: boolean;
   viewModels: boolean;
   viewInference: boolean;
+
+  // Corrosion dashboard action items
+  viewActions: boolean;
+  manageActions: boolean; // raise/edit an action
+  approveActions: boolean; // approve/reject an action
 }
 

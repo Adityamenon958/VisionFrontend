@@ -43,6 +43,11 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
     viewDatasets: false,
     viewModels: false,
     viewInference: false,
+
+    // Corrosion dashboard action items
+    viewActions: false,
+    manageActions: false,
+    approveActions: false,
   };
 
   switch (role) {
@@ -71,6 +76,9 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
         viewDatasets: true,
         viewModels: true,
         viewInference: true,
+        viewActions: true,
+        manageActions: true,
+        approveActions: true,
       };
     }
     case "workspace_admin": {
@@ -96,6 +104,9 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
         viewDatasets: true,
         viewModels: true,
         viewInference: true,
+        viewActions: true,
+        manageActions: true,
+        approveActions: true,
       };
     }
     case "ml_engineer": {
@@ -117,6 +128,7 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
         viewDatasets: true,
         viewModels: true,
         viewInference: true,
+        viewActions: true,
       };
     }
     case "operator": {
@@ -135,6 +147,8 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
         viewDatasets: true,
         viewModels: true,
         viewInference: true,
+        viewActions: true,
+        manageActions: true,
       };
     }
     case "viewer":
@@ -151,6 +165,7 @@ export const getRolePermissions = (role: UserRole): RolePermissions => {
         viewInference: true,
         viewInferenceResults: true,
         deleteOwnInference: false,
+        viewActions: true,
       };
     }
   }

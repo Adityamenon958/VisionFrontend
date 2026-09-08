@@ -16,11 +16,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { useFormValidation } from "@/hooks/useFormValidation";
 import { projectSchema } from "@/lib/validations/authSchemas";
 import { useToast } from "@/hooks/use-toast";
+import { renameProjectCascade } from "@/lib/api/projects";
 
 export interface EditProjectModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   project: { id: string; name: string; description?: string | null } | null;
+  /** Needed to cascade-rename the project's linked data in MongoDB when the name changes. */
+  companyName: string;
   onSaved?: () => void;
 }
 
@@ -28,6 +31,7 @@ export function EditProjectModal({
   open,
   onOpenChange,
   project,
+  companyName,
   onSaved,
 }: EditProjectModalProps) {
   const { toast } = useToast();
@@ -66,15 +70,37 @@ export function EditProjectModal({
 
     setSaving(true);
     try {
+      const trimmedName = form.values.projectName.trim();
+      const nameChanged = trimmedName !== project.name;
+
       const { error } = await supabase
         .from("projects")
         .update({
-          name: form.values.projectName.trim(),
+          name: trimmedName,
           description: (form.values.projectDescription || "").trim() || null,
         })
         .eq("id", project.id);
 
       if (error) throw error;
+
+      // The project's actual inspection data (surveys, photos, actions,
+      // trained models) lives in MongoDB, matched by name — keep it linked.
+      if (nameChanged && companyName) {
+        try {
+          await renameProjectCascade(companyName, project.name, trimmedName);
+        } catch (cascadeErr: any) {
+          toast({
+            title: "Project renamed, but linked data may be out of sync",
+            description:
+              cascadeErr?.message ||
+              "Could not update historical inspection data under the new name. Contact support to reconcile.",
+            variant: "destructive",
+          });
+          onOpenChange(false);
+          await Promise.resolve(onSaved?.());
+          return;
+        }
+      }
 
       toast({
         title: "Project updated",

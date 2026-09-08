@@ -31,16 +31,25 @@ export const convertAnnotationsToLabels = async (
 /**
  * Get model download URL
  * GET /api/models/:modelId/download-url
+ *
+ * `variant` only applies when format is "tflite" ("float16" | "float32"),
+ * for on-device mobile inference (react-native-fast-tflite).
  */
 export const getModelDownloadUrl = async (
   modelId: string,
-  format: "pt" | "onnx" | "zip"
+  format: "pt" | "onnx" | "tflite" | "zip",
+  variant?: "float16" | "float32"
 ): Promise<{
   downloadUrl: string;
   expiresAt: string;
   fileSize: number;
+  variant?: string;
 }> => {
-  const path = `/models/${encodeURIComponent(modelId)}/download-url?format=${format}`;
+  const params = new URLSearchParams({ format });
+  if (format === "tflite" && variant) {
+    params.set("variant", variant);
+  }
+  const path = `/models/${encodeURIComponent(modelId)}/download-url?${params.toString()}`;
 
   return apiRequest(path);
 };

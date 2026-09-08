@@ -11,20 +11,39 @@ import { useToast } from "@/hooks/use-toast";
 import * as modelsApi from "@/lib/api/models";
 import { getAuthHeaders, apiUrl } from "@/lib/api/config";
 
+type DownloadFormat = "pt" | "onnx" | "zip" | "tflite-float16" | "tflite-float32";
+
 interface ModelDownloadButtonProps {
   modelId: string;
   modelName: string;
-  availableFormats?: ("pt" | "onnx" | "zip")[];
+  availableFormats?: DownloadFormat[];
   onDownloadStart?: () => void;
   onDownloadComplete?: () => void;
   onDownloadError?: (error: Error) => void;
 }
 
-const formatLabels: Record<string, string> = {
+const formatLabels: Record<DownloadFormat, string> = {
   pt: "PyTorch (.pt)",
   onnx: "ONNX (.onnx)",
   zip: "ZIP Bundle (.zip)",
+  "tflite-float16": "TFLite — float16 (.tflite)",
+  "tflite-float32": "TFLite — float32 (.tflite)",
 };
+
+const formatHints: Partial<Record<DownloadFormat, string>> = {
+  "tflite-float16": "For the mobile app. Smaller, near-identical accuracy.",
+  "tflite-float32": "For the mobile app. Larger, full precision.",
+};
+
+/** Splits a UI format into the API's format + variant query params. */
+function toApiFormat(format: DownloadFormat): {
+  apiFormat: "pt" | "onnx" | "zip" | "tflite";
+  variant?: "float16" | "float32";
+} {
+  if (format === "tflite-float16") return { apiFormat: "tflite", variant: "float16" };
+  if (format === "tflite-float32") return { apiFormat: "tflite", variant: "float32" };
+  return { apiFormat: format };
+}
 
 const formatFileSize = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
@@ -45,20 +64,31 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
   const [downloadProgress, setDownloadProgress] = useState(0);
   const { toast } = useToast();
 
-  const handleDownload = async (format: "pt" | "onnx" | "zip") => {
+  const handleDownload = async (format: DownloadFormat) => {
+    const { apiFormat, variant } = toApiFormat(format);
     setDownloading(format);
     setDownloadProgress(0);
     onDownloadStart?.();
 
+    if (apiFormat === "tflite") {
+      toast({
+        title: "Preparing TFLite download",
+        description:
+          "If this is the first TFLite download for this model, converting from the checkpoint can take a few minutes.",
+      });
+    }
+
     try {
       // Get metadata (including file size) via authenticated API
-      const { fileSize } = await modelsApi.getModelDownloadUrl(modelId, format);
+      const { fileSize } = await modelsApi.getModelDownloadUrl(modelId, apiFormat, variant);
 
       // Download file using authenticated request to the download endpoint
       const headers = await getAuthHeaders();
+      const params = new URLSearchParams({ format: apiFormat });
+      if (variant) params.set("variant", variant);
       const downloadPath = `/models/${encodeURIComponent(
         modelId
-      )}/download?format=${format}`;
+      )}/download?${params.toString()}`;
       const response = await fetch(apiUrl(downloadPath), { headers });
 
       if (!response.ok) {
@@ -66,7 +96,8 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
       }
 
       const blob = await response.blob();
-      downloadBlob(blob, modelName, format, fileSize);
+      const extension = apiFormat === "tflite" ? `${variant}.tflite` : apiFormat;
+      downloadBlob(blob, `${modelName}.${extension}`, fileSize);
 
       toast({
         title: "Download complete",
@@ -89,16 +120,11 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
     }
   };
 
-  const downloadBlob = (
-    blob: Blob,
-    name: string,
-    format: string,
-    fileSize: number
-  ) => {
+  const downloadBlob = (blob: Blob, filename: string, fileSize: number) => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${name}.${format}`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -165,7 +191,7 @@ export const ModelDownloadButton: React.FC<ModelDownloadButtonProps> = ({
           >
             <span className="font-medium">{formatLabels[format]}</span>
             <span className="text-xs text-muted-foreground">
-              Click to download
+              {formatHints[format] || "Click to download"}
             </span>
           </DropdownMenuItem>
         ))}

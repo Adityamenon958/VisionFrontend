@@ -265,6 +265,7 @@ export type Database = {
           description: string | null
           id: string
           name: string
+          project_type: string
         }
         Insert: {
           company_id?: string | null
@@ -273,6 +274,7 @@ export type Database = {
           description?: string | null
           id?: string
           name: string
+          project_type?: string
         }
         Update: {
           company_id?: string | null
@@ -281,6 +283,7 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
+          project_type?: string
         }
         Relationships: [
           {
